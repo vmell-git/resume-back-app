@@ -220,8 +220,7 @@ def map_level(row) -> Tuple[str, str]:
             return "MOYENNE", "Remplissage : PRIORITY_1/PRIORITY_2/PRIORITY_3/DEFAULT_PENALTY/STRONG_1/STRONG_2/STRONG_3 → MOYENNE"
         if (
             {"PRIVATE_ALGO_1","PRIVATE_ALGO_2","PRIVATE_ALGO_3","SOFT_1","SOFT_2","SOFT_3"} & toks
-            or any(t.startswith("SOFT_") for t in toks)
-        ):
+            or any(t.startswith("SOFT_") for t in toks):
             return "SOUPLE", "Remplissage : PRIVATE_ALGO_*/SOFT_* → SOUPLE"
         return niveau, rule
 
