@@ -1,7 +1,9 @@
 # app.py
 # ------------------------------------------------------
 # Streamlit – Générateur d'Excel récapitulatif de paramétrage Hopia
-# (version avec upload de fichier OU copier-coller de texte)
+# Entrées possibles :
+#   - Fichier brut (TXT / CSV / XLSX) de type "export Excel"
+#   - Copier-coller de texte brut (y compris format vertical type Urgentistes)
 # ------------------------------------------------------
 
 import io
@@ -17,6 +19,26 @@ import streamlit as st
 st.set_page_config(page_title="Hopia – Récap Paramétrage", layout="wide")
 
 st.title("📊 Hopia – Générateur d’Excel récapitulatif de paramétrage")
+st.markdown(
+    """
+Cette application permet de passer d’un **paramétrage brut** (exporté sous forme de fichier texte ou Excel)
+à un **Excel harmonisé** avec les niveaux de contraintes **DURE / MOYENNE / SOUPLE**.
+
+**Formats acceptés :**
+- Fichier texte `.txt` (copié-collé d’un Excel, colonnes séparées par `;`, tab, `,` ou espaces)
+- Fichier `.csv`
+- Fichier Excel `.xlsx` / `.xls`
+- **OU copier-coller directement le contenu dans la zone prévue**
+
+**Colonnes attendues (au minimum) :**
+- `PK`
+- `Type`
+- `Priorités`
+- `Équipes`
+
+Les autres colonnes sont conservées dans la sortie.
+"""
+)
 
 # ------------------------------------------------------
 # Couleurs pour l'export Excel
@@ -29,19 +51,126 @@ COLOR_HEADER_TXT = "#FFFFFF"  # texte header blanc
 
 
 # ------------------------------------------------------
-# Lecture de contenu texte brut (coller dans un text_area ou .txt)
+# Parseur pour le format vertical (exemple Urgentistes)
+# ------------------------------------------------------
+def parse_vertical_blocks(content: str) -> pd.DataFrame:
+    """
+    Parse un texte copié-collé au format :
+    PK
+    Intitulé [TAB ou 2+ espaces] Type
+    (une ou plusieurs lignes de Priorités)
+    Équipes
+
+    Exemple concret : le gros bloc 'Urgentistes' fourni.
+    """
+    lines = [l.strip() for l in content.splitlines()]
+    # On enlève les lignes vides
+    lines = [l for l in lines if l]
+
+    # On avance jusqu'à la première ligne qui ressemble à un PK numérique
+    i = 0
+    while i < len(lines) and not lines[i].isdigit():
+        i += 1
+
+    def looks_like_pk(s: str) -> bool:
+        return s.isdigit()
+
+    def looks_like_priority(s: str) -> bool:
+        # Tout ce qui ressemble à une inégalité ou un token de pénalité
+        return bool(
+            re.search(
+                r"(HARD(?:_LOWER)?|SOFT_\d|STRONG_\d|PRIORITY_\d|DEFAULT_PENALTY|PRIVATE_ALGO_1|<|>|≤|>=|≥)",
+                s
+            )
+        )
+
+    records = []
+
+    while i < len(lines):
+        if not looks_like_pk(lines[i]):
+            # Si on tombe sur autre chose qu'un PK, on avance
+            i += 1
+            continue
+
+        pk = lines[i]
+        i += 1
+        if i >= len(lines):
+            break
+
+        # Ligne suivante : Intitulé + Type séparés par tab ou au moins 2 espaces
+        line2 = lines[i]
+        i += 1
+
+        parts = re.split(r"\t+| {2,}", line2, maxsplit=1)
+        if len(parts) == 2:
+            intitule = parts[0].strip()
+            type_val = parts[1].strip()
+        else:
+            intitule = parts[0].strip()
+            type_val = ""
+
+        # On accumule les lignes de Priorités, puis l'Équipe
+        prio_lines: list[str] = []
+        equipe = ""
+
+        while i < len(lines) and not looks_like_pk(lines[i]):
+            l = lines[i]
+
+            # Si on a déjà des priorités et que la ligne ne ressemble plus à une priorité → équipe
+            if not looks_like_priority(l) and prio_lines:
+                equipe = l
+                i += 1
+                break
+
+            # Si aucune priorité lue et la ligne ne ressemble pas à une priorité :
+            # on considère que c'est une ligne "Équipes" sans priorités détaillées.
+            if not looks_like_priority(l) and not prio_lines:
+                equipe = l
+                i += 1
+                break
+
+            # Sinon, c'est une ligne de priorités
+            prio_lines.append(l)
+            i += 1
+
+        priorite = " ".join(prio_lines).strip()
+
+        records.append(
+            {
+                "PK": pk,
+                "Intitulé": intitule,
+                "Type": type_val,
+                "Priorités": priorite,
+                "Équipes": equipe,
+            }
+        )
+
+    if not records:
+        return pd.DataFrame()
+
+    return pd.DataFrame(records)
+
+
+# ------------------------------------------------------
+# Lecture de contenu texte brut (copier-coller)
 # ------------------------------------------------------
 def read_text_content(content: str) -> pd.DataFrame | None:
     """
-    Lit un contenu texte brut représentant un tableau (copié-collé Excel ou fichier .txt),
-    avec détection automatique du séparateur.
+    Lit un contenu texte brut :
+    1) On tente le format vertical (type Urgentistes)
+    2) Sinon on tente des formats CSV/TSV classiques
     """
     content = content.strip()
     if not content:
         return None
 
-    possible_seps = [";", "\t", ","]
+    # 1) Tentative : format vertical
+    df_vert = parse_vertical_blocks(content)
+    if not df_vert.empty:
+        return df_vert
 
+    # 2) Tentative : CSV classique (séparateurs ; tab ,)
+    possible_seps = [";", "\t", ","]
     for sep in possible_seps:
         try:
             df = pd.read_csv(io.StringIO(content), sep=sep, engine="python")
@@ -50,12 +179,12 @@ def read_text_content(content: str) -> pd.DataFrame | None:
         except Exception:
             pass
 
-    # Dernier recours : séparation par espaces (une ou plusieurs)
+    # 3) Dernier recours : séparation par espaces
     try:
         df = pd.read_csv(io.StringIO(content), delim_whitespace=True, engine="python")
         return df
     except Exception:
-        st.error("Impossible d'interpréter le texte collé. Vérifie le format (séparateurs).")
+        st.error("Impossible d'interpréter le texte collé. Vérifie le format.")
         return None
 
 
@@ -127,9 +256,10 @@ def token_set(priorites: str) -> set:
         return set()
     txt = str(priorites).upper()
 
-    # On capture les mots-clés même dans des expressions du type "2 < SOFT_2 ≤ 3 3 < PRIORITY_1 ≤ 4"
+    # On capture les mots-clés même dans des expressions du type
+    # "2 < SOFT_2 ≤ 3 3 < PRIORITY_1 ≤ 4"
     parts = re.findall(
-        r"(HARD(?:_LOWER)?|SOFT_\d|STRONG_\d|PRIORITY_\d|DEFAULT_PENALTY)",
+        r"(HARD(?:_LOWER)?|SOFT_\d|STRONG_\d|PRIORITY_\d|DEFAULT_PENALTY|PRIVATE_ALGO_1)",
         txt
     )
     return set(parts)
@@ -151,7 +281,7 @@ def map_level(row) -> Tuple[str, str]:
     is_remplissage = "remplissage des postes" in type_txt
 
     # Valeur par défaut si on ne comprend rien → SOUPLE
-    niveau = "SOUPLE"
+    niveau = "SOU PLE"
     rule = "SOFT_* → SOUPLE (fallback)"
 
     if is_remplissage:
@@ -160,25 +290,33 @@ def map_level(row) -> Tuple[str, str]:
             return "DURE", "Remplissage : PRIORITY_1/HARD/STRONG_1 → DURE"
         if {"PRIORITY_2", "STRONG_2", "STRONG_3"} & toks:
             return "MOYENNE", "Remplissage : PRIORITY_2/STRONG_2/STRONG_3 → MOYENNE"
-        if {"PRIORITY_3", "DEFAULT_PENALTY"} & toks or any(t.startswith("SOFT_") for t in toks):
-            return "SOUPLE", "Remplissage : PRIORITY_3/DEFAULT_PENALTY/SOFT_* → SOUPLE"
+        if (
+            {"PRIORITY_3", "DEFAULT_PENALTY"} & toks
+            or any(t.startswith("SOFT_") for t in toks)
+        ):
+            return "SOU PLE", "Remplissage : PRIORITY_3/DEFAULT_PENALTY/SOFT_* → SOUPLE"
         # Aucun token connu : on laisse SOUPLE
         return niveau, rule
 
     # Cas général (hors Remplissage des postes)
     if "HARD" in toks or "HARD_LOWER" in toks:
         return "DURE", "Hors remplissage : HARD/HARD_LOWER → DURE"
-    if any(t.startswith("STRONG_") for t in toks) or any(t.startswith("PRIORITY_") for t in toks) or "DEFAULT_PENALTY" in toks:
-        return "MOYENNE", "Hors remplissage : STRONG_*/PRIORITY_*/DEFAULT → MOYENNE"
+    if (
+        any(t.startswith("STRONG_") for t in toks)
+        or any(t.startswith("PRIORITY_") for t in toks)
+        or "DEFAULT_PENALTY" in toks
+        or "PRIVATE_ALGO_1" in toks
+    ):
+        return "MOYENNE", "Hors remplissage : STRONG_*/PRIORITY_*/DEFAULT/PRIVATE → MOYENNE"
     if any(t.startswith("SOFT_") for t in toks):
-        return "SOUPLE", "Hors remplissage : SOFT_* → SOUPLE"
+        return "SOU PLE", "Hors remplissage : SOFT_* → SOUPLE"
 
     # Aucun mot-clé reconnu : on laisse SOUPLE
     return niveau, rule
 
 
 def color_for_level(level: str) -> str:
-    """Renvoie la couleur hex correspondante au niveau (DURE/MOYENNE/SOUPLE)."""
+    """Renvoie la couleur hex correspondante au niveau (DURE/MOYENNE/SOU PLE)."""
     l = (level or "").upper().replace("É", "E")
     if "DURE" in l:
         return COLOR_DURE
@@ -192,7 +330,7 @@ def color_for_level(level: str) -> str:
 # ------------------------------------------------------
 def build_summary(df: pd.DataFrame) -> pd.DataFrame:
     tmp = df.copy()
-    tmp["Niveau"] = tmp["Niveau"].fillna("SOUPLE")
+    tmp["Niveau"] = tmp["Niveau"].fillna("SOU PLE")
 
     piv = pd.pivot_table(
         tmp,
@@ -204,7 +342,7 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # On force l’ordre des colonnes
-    piv = piv.reindex(columns=["DURE", "MOYENNE", "SOUPLE"], fill_value=0)
+    piv = piv.reindex(columns=["DURE", "MOYENNE", "SOU PLE"], fill_value=0)
     piv["Total"] = piv.sum(axis=1)
     piv = piv.reset_index().rename(columns={"Type": "Rubrique"})
 
@@ -239,7 +377,7 @@ def to_excel_bytes(df_summary: pd.DataFrame, df_full: pd.DataFrame) -> bytes:
             ws.set_column(col_idx, col_idx, 25)
 
         # Coloration des colonnes par niveau
-        col_map = {"DURE": COLOR_DURE, "MOYENNE": COLOR_MOY, "SOUPLE": COLOR_SOFT}
+        col_map = {"DURE": COLOR_DURE, "MOYENNE": COLOR_MOY, "SOU PLE": COLOR_SOFT}
         for col_name, bg in col_map.items():
             if col_name in df_summary.columns:
                 col_idx = df_summary.columns.get_loc(col_name)
@@ -263,7 +401,6 @@ def to_excel_bytes(df_summary: pd.DataFrame, df_full: pd.DataFrame) -> bytes:
 
         # Coloration par ligne en fonction de la colonne Niveau
         if "Niveau" in df_full.columns:
-            lvl_col = df_full.columns.get_loc("Niveau")
             for row_idx in range(1, len(df_full) + 1):
                 level = str(df_full.iloc[row_idx - 1]["Niveau"])
                 bg = color_for_level(level)
@@ -282,9 +419,9 @@ uploaded = st.file_uploader(
 )
 
 text_pasted = st.text_area(
-    "✂️ Ou collez directement ici le contenu de votre export (texte brut) :",
-    placeholder="PK;Type;Priorités;Équipes\n1536;OS4 - Jeudi MAT CS;HARD;ARE\n...",
-    height=180,
+    "✂️ Ou collez directement ici le contenu de votre export :",
+    placeholder="PK\tType\tPriorités\tÉquipes\n549\tPas de MAO...\n...",
+    height=200,
 )
 
 df_raw = None
@@ -344,14 +481,14 @@ if df_raw is not None:
 **Hors _Remplissage des postes_ :**
 
 - `HARD` / `HARD_LOWER` → **DURE**
-- `STRONG_*` / `PRIORITY_*` / `DEFAULT_PENALTY` → **MOYENNE**
-- `SOFT_*` → **SOUPLE**
+- `STRONG_*` / `PRIORITY_*` / `DEFAULT_PENALTY` / `PRIVATE_ALGO_1` → **MOYENNE**
+- `SOFT_*` → **SOU PLE**
 
 **Pour _Remplissage des postes_ :**
 
 - `PRIORITY_1` / `HARD` / `STRONG_1` → **DURE** (poste à remplir en priorité extrême)
 - `PRIORITY_2` / `STRONG_2` / `STRONG_3` → **MOYENNE** (poste à remplir normalement)
-- `PRIORITY_3` / `DEFAULT_PENALTY` / `SOFT_*` → **SOUPLE** (poste à remplir en dernier)
+- `PRIORITY_3` / `DEFAULT_PENALTY` / `SOFT_*` → **SOU PLE** (poste à remplir en dernier)
 """
         )
 
