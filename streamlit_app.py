@@ -342,9 +342,43 @@ def to_excel_bytes(df_summary: pd.DataFrame,
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         wb = writer.book
 
-        # -------- Feuille 1 – Résumé par rubrique --------
+        # -------- Feuille 2 – Autres contraintes --------
+        df_autres.to_excel(writer, sheet_name="Paramétrage – Contraintes", index=False)
+        ws2 = writer.sheets["Paramétrage – Autres"]
+
+        for col_idx, col_name in enumerate(df_autres.columns):
+            ws2.write(0, col_idx, col_name, fmt_header)
+            ws2.set_column(col_idx, col_idx, 28)
+
+        # Coloration uniquement de la colonne Niveau
+        if "Niveau" in df_autres.columns and not df_autres.empty:
+            niveau_col = df_autres.columns.get_loc("Niveau")
+            for row_idx in range(1, len(df_autres) + 1):
+                level = str(df_autres.iloc[row_idx - 1]["Niveau"])
+                bg = color_for_level(level)
+                fmt = wb.add_format({"bg_color": bg})
+                ws2.write(row_idx, niveau_col, level, fmt)
+
+        # -------- Feuille 3 – Remplissage des postes --------
+        df_remp.to_excel(writer, sheet_name="Paramétrage – Remplissage des Postes", index=False)
+        ws3 = writer.sheets["Paramétrage – Remplissage"]
+
+        for col_idx, col_name in enumerate(df_remp.columns):
+            ws3.write(0, col_idx, col_name, fmt_header)
+            ws3.set_column(col_idx, col_idx, 28)
+
+        # Coloration uniquement de la colonne Niveau
+        if "Niveau" in df_remp.columns and not df_remp.empty:
+            niveau_col = df_remp.columns.get_loc("Niveau")
+            for row_idx in range(1, len(df_remp) + 1):
+                level = str(df_remp.iloc[row_idx - 1]["Niveau"])
+                bg = color_for_level(level)
+                fmt = wb.add_format({"bg_color": bg})
+                ws3.write(row_idx, niveau_col, level, fmt)
+                
+ # -------- Feuille 1 – Résumé par rubrique --------
         df_summary.to_excel(writer, sheet_name="Résumé par rubrique", index=False)
-        ws = writer.sheets["Résumé par rubrique"]
+        ws = writer.sheets["Résumé"]
 
         fmt_header = wb.add_format(
             {
@@ -373,41 +407,6 @@ def to_excel_bytes(df_summary: pd.DataFrame,
                     col_idx,
                     {"type": "no_errors", "format": fmt_lvl},
                 )
-
-        # -------- Feuille 2 – Autres contraintes --------
-        df_autres.to_excel(writer, sheet_name="Paramétrage – Autres", index=False)
-        ws2 = writer.sheets["Paramétrage – Autres"]
-
-        for col_idx, col_name in enumerate(df_autres.columns):
-            ws2.write(0, col_idx, col_name, fmt_header)
-            ws2.set_column(col_idx, col_idx, 28)
-
-        # Coloration uniquement de la colonne Niveau
-        if "Niveau" in df_autres.columns and not df_autres.empty:
-            niveau_col = df_autres.columns.get_loc("Niveau")
-            for row_idx in range(1, len(df_autres) + 1):
-                level = str(df_autres.iloc[row_idx - 1]["Niveau"])
-                bg = color_for_level(level)
-                fmt = wb.add_format({"bg_color": bg})
-                ws2.write(row_idx, niveau_col, level, fmt)
-
-        # -------- Feuille 3 – Remplissage des postes --------
-        df_remp.to_excel(writer, sheet_name="Paramétrage – Remplissage", index=False)
-        ws3 = writer.sheets["Paramétrage – Remplissage"]
-
-        for col_idx, col_name in enumerate(df_remp.columns):
-            ws3.write(0, col_idx, col_name, fmt_header)
-            ws3.set_column(col_idx, col_idx, 28)
-
-        # Coloration uniquement de la colonne Niveau
-        if "Niveau" in df_remp.columns and not df_remp.empty:
-            niveau_col = df_remp.columns.get_loc("Niveau")
-            for row_idx in range(1, len(df_remp) + 1):
-                level = str(df_remp.iloc[row_idx - 1]["Niveau"])
-                bg = color_for_level(level)
-                fmt = wb.add_format({"bg_color": bg})
-                ws3.write(row_idx, niveau_col, level, fmt)
-
     return output.getvalue()
 
 
