@@ -214,15 +214,15 @@ def map_level(row) -> Tuple[str, str]:
     rule = "SOFT_* → SOUPLE (fallback)"
 
     if is_remplissage:
-        if {"PRIORITY_1", "HARD", "STRONG_1"} & toks:
-            return "DURE", "Remplissage : PRIORITY_1/HARD/STRONG_1 → DURE"
-        if {"PRIORITY_2", "STRONG_2", "STRONG_3"} & toks:
-            return "MOYENNE", "Remplissage : PRIORITY_2/STRONG_2/STRONG_3 → MOYENNE"
+        if {"HARD_LOWER", "HARD"} & toks:
+            return "DURE", "Remplissage : HARD/HARD_LOWER → DURE"
+        if {"PRIORITY_1","PRIORITY_2","PRIORITY_3","DEFAULT_PENALTY","STRONG_1","STRONG_2", "STRONG_3"} & toks:
+            return "MOYENNE", "Remplissage : PRIORITY_1/PRIORITY_2/PRIORITY_3/DEFAULT_PENALTY/STRONG_1/STRONG_2/STRONG_3 → MOYENNE"
         if (
-            {"PRIORITY_3", "DEFAULT_PENALTY"} & toks
+            {"PRIVATE_ALGO_1","PRIVATE_ALGO_2","PRIVATE_ALGO_3","SOFT_1","SOFT_2","SOFT_3"} & toks
             or any(t.startswith("SOFT_") for t in toks)
         ):
-            return "SOUPLE", "Remplissage : PRIORITY_3/DEFAULT_PENALTY/SOFT_* → SOUPLE"
+            return "SOUPLE", "Remplissage : PRIVATE_ALGO_*/SOFT_* → SOUPLE"
         return niveau, rule
 
     if "HARD" in toks or "HARD_LOWER" in toks:
@@ -231,11 +231,11 @@ def map_level(row) -> Tuple[str, str]:
         any(t.startswith("STRONG_") for t in toks)
         or any(t.startswith("PRIORITY_") for t in toks)
         or "DEFAULT_PENALTY" in toks
-        or "PRIVATE_ALGO_1" in toks
     ):
         return "MOYENNE", "Hors remplissage : STRONG_*/PRIORITY_*/DEFAULT/PRIVATE → MOYENNE"
-    if any(t.startswith("SOFT_") for t in toks):
-        return "SOUPLE", "Hors remplissage : SOFT_* → SOUPLE"
+    if any(t.startswith("SOFT_") for t in toks)
+    or any(t.startswith("PRIVATE_ALGO_") for t in toks):
+        return "SOUPLE", "Hors remplissage : SOFT_*/PRIVATE_ALGO_* → SOUPLE"
 
     return niveau, rule
 
