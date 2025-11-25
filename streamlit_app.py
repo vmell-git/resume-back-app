@@ -232,8 +232,8 @@ def map_level(row) -> Tuple[str, str]:
         or "DEFAULT_PENALTY" in toks
     ):
         return "MOYENNE", "Hors remplissage : STRONG_*/PRIORITY_*/DEFAULT/PRIVATE → MOYENNE"
-    if any(t.startswith("SOFT_") for t in toks)
-    or any(t.startswith("PRIVATE_ALGO_") for t in toks):
+    if (any(t.startswith("SOFT_") for t in toks)
+    or any(t.startswith("PRIVATE_ALGO_") for t in toks)):
         return "SOUPLE", "Hors remplissage : SOFT_*/PRIVATE_ALGO_* → SOUPLE"
 
     return niveau, rule
