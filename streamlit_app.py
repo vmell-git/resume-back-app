@@ -279,6 +279,7 @@ def to_excel_bytes(df_autres: pd.DataFrame,
                    df_remp: pd.DataFrame,
                    df_summary: pd.DataFrame) -> bytes:
     import xlsxwriter
+    from xlsxwriter.utility import xl_col_to_name
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -291,6 +292,35 @@ def to_excel_bytes(df_autres: pd.DataFrame,
                 "align": "center",
             }
         )
+
+        # --- Petite fonction utilitaire pour ajouter une bordure épaisse
+        def add_type_borders(ws, df: pd.DataFrame, col_name: str):
+            """
+            Ajoute une bordure horizontale épaisse entre chaque groupe
+            de valeurs différentes dans la colonne col_name.
+            """
+            if df.empty or col_name not in df.columns:
+                return
+
+            type_col_idx = df.columns.get_loc(col_name)
+            col_letter = xl_col_to_name(type_col_idx)
+
+            border_fmt = wb.add_format({"top": 2})  # 2 ~ bordure épaisse
+
+            nrows, ncols = df.shape
+            # On applique à toutes les colonnes de chaque ligne,
+            # mais seulement à partir de la 2e ligne de données
+            ws.conditional_format(
+                1,
+                0,
+                nrows,
+                ncols - 1,
+                {
+                    "type": "formula",
+                    "criteria": f"=AND(ROW()>2, ${col_letter}2<>${col_letter}1)",
+                    "format": border_fmt,
+                },
+            )
 
         # === Feuille 1 – Paramétrage – Autres ===
         df_autres.to_excel(writer, sheet_name="Paramétrage – Autres", index=False)
@@ -311,6 +341,9 @@ def to_excel_bytes(df_autres: pd.DataFrame,
                     wb.add_format({"bg_color": color_for_level(val)}),
                 )
 
+        # >>> Bordure épaisse entre chaque Type de contrainte
+        add_type_borders(ws2, df_autres, "Type")
+
         # === Feuille 2 – Paramétrage – Remplissage ===
         df_remp.to_excel(writer, sheet_name="Paramétrage – Remplissage", index=False)
         ws3 = writer.sheets["Paramétrage – Remplissage"]
@@ -329,6 +362,9 @@ def to_excel_bytes(df_autres: pd.DataFrame,
                     val,
                     wb.add_format({"bg_color": color_for_level(val)}),
                 )
+
+        # >>> Bordure épaisse entre chaque Type de contrainte
+        add_type_borders(ws3, df_remp, "Type")
 
         # === Feuille 3 – Résumé (dernière feuille) ===
         df_summary.to_excel(writer, sheet_name="Résumé", index=False)
@@ -349,6 +385,9 @@ def to_excel_bytes(df_autres: pd.DataFrame,
                     col_idx,
                     {"type": "no_errors", "format": wb.add_format({"bg_color": bg})},
                 )
+
+        # >>> Bordure épaisse entre chaque Rubrique (Type agrégé) dans le résumé
+        add_type_borders(ws, df_summary, "Rubrique")
 
     return output.getvalue()
 
