@@ -1,30 +1,7 @@
 # app.py
 # ------------------------------------------------------
 # Streamlit – Générateur d'Excel récapitulatif de paramétrage Hopia
-# Entrée : fichier brut (TXT / CSV / XLSX) de type "export Excel" :
-#   Colonnes attendues (au minimum) :
-#     - PK
-#     - Type          (catégorie de contrainte : Enchaînement de postes, Temps de travail, etc.)
-#     - Priorités     (HARD, SOFT_1, PRIORITY_1, HARD_LOWER, STRONG_2, etc.)
-#     - Équipes       (ARE, IADE, Urgentistes, ...)
-#
-# Sortie : fichier Excel téléchargeable contenant :
-#   - Feuille "Résumé par rubrique" (compte des contraintes DURE/MOYENNE/SOUPLE par Type)
-#   - Feuille "Paramétrage harmonisé" avec :
-#       * Niveau = DURE / MOYENNE / SOUPLE
-#       * Règle de mapping utilisée
-#       * Couleurs de fond par niveau (rouge / orange / vert)
-#
-# Règles métier :
-#   HORS "Remplissage des postes" :
-#       - HARD ou HARD_LOWER → DURE
-#       - STRONG_* / PRIORITY_* / DEFAULT_PENALTY → MOYENNE
-#       - SOFT_* → SOUPLE
-#
-#   POUR "Remplissage des postes" :
-#       - PRIORITY_1 / HARD / STRONG_1 → DURE (poste à remplir en priorité extrême)
-#       - PRIORITY_2 / STRONG_2 / STRONG_3 → MOYENNE (poste à remplir normalement)
-#       - PRIORITY_3 / DEFAULT_PENALTY / SOFT_* → SOUPLE (poste à remplir en dernier)
+# (version avec upload de fichier OU copier-coller de texte)
 # ------------------------------------------------------
 
 import io
@@ -40,25 +17,6 @@ import streamlit as st
 st.set_page_config(page_title="Hopia – Récap Paramétrage", layout="wide")
 
 st.title("📊 Hopia – Générateur d’Excel récapitulatif de paramétrage")
-st.markdown(
-    """
-Cette application permet de passer d’un **paramétrage brut** (exporté sous forme de fichier texte ou Excel)
-à un **Excel harmonisé** avec les niveaux de contraintes **DURE / MOYENNE / SOUPLE**.
-
-**Formats acceptés :**
-- Fichier texte `.txt` (copié-collé d’un Excel, colonnes séparées par `;`, tab, `,` ou espaces)
-- Fichier `.csv`
-- Fichier Excel `.xlsx` / `.xls`
-
-**Colonnes attendues (au minimum) :**
-- `PK`
-- `Type`
-- `Priorités`
-- `Équipes`
-
-Les autres colonnes sont conservées dans la sortie.
-"""
-)
 
 # ------------------------------------------------------
 # Couleurs pour l'export Excel
@@ -68,6 +26,37 @@ COLOR_MOY = "#ffe5b4"         # orange clair
 COLOR_SOFT = "#ccffcc"        # vert clair
 COLOR_HEADER = "#003366"      # bleu foncé
 COLOR_HEADER_TXT = "#FFFFFF"  # texte header blanc
+
+
+# ------------------------------------------------------
+# Lecture de contenu texte brut (coller dans un text_area ou .txt)
+# ------------------------------------------------------
+def read_text_content(content: str) -> pd.DataFrame | None:
+    """
+    Lit un contenu texte brut représentant un tableau (copié-collé Excel ou fichier .txt),
+    avec détection automatique du séparateur.
+    """
+    content = content.strip()
+    if not content:
+        return None
+
+    possible_seps = [";", "\t", ","]
+
+    for sep in possible_seps:
+        try:
+            df = pd.read_csv(io.StringIO(content), sep=sep, engine="python")
+            if df.shape[1] >= 2:
+                return df
+        except Exception:
+            pass
+
+    # Dernier recours : séparation par espaces (une ou plusieurs)
+    try:
+        df = pd.read_csv(io.StringIO(content), delim_whitespace=True, engine="python")
+        return df
+    except Exception:
+        st.error("Impossible d'interpréter le texte collé. Vérifie le format (séparateurs).")
+        return None
 
 
 # ------------------------------------------------------
@@ -93,25 +82,7 @@ def read_uploaded_file(uploaded_file) -> pd.DataFrame | None:
         except UnicodeDecodeError:
             content = raw_bytes.decode("latin-1")
 
-        # On essaie successivement plusieurs séparateurs
-        possible_seps = [";", "\t", ","]
-
-        for sep in possible_seps:
-            try:
-                df = pd.read_csv(io.StringIO(content), sep=sep, engine="python")
-                # Si on obtient au moins 2 colonnes, on considère que c'est bon
-                if df.shape[1] >= 2:
-                    return df
-            except Exception:
-                pass
-
-        # Dernier recours : séparation par espaces (une ou plusieurs)
-        try:
-            df = pd.read_csv(io.StringIO(content), delim_whitespace=True, engine="python")
-            return df
-        except Exception:
-            st.error("Impossible d'interpréter le fichier texte. Vérifie le format (séparateurs).")
-            return None
+        return read_text_content(content)
 
     st.error("Format de fichier non supporté. Utilise un .txt, .csv ou .xlsx.")
     return None
@@ -180,7 +151,7 @@ def map_level(row) -> Tuple[str, str]:
     is_remplissage = "remplissage des postes" in type_txt
 
     # Valeur par défaut si on ne comprend rien → SOUPLE
-    niveau = "SOU PLE"
+    niveau = "SOUPLE"
     rule = "SOFT_* → SOUPLE (fallback)"
 
     if is_remplissage:
@@ -190,7 +161,7 @@ def map_level(row) -> Tuple[str, str]:
         if {"PRIORITY_2", "STRONG_2", "STRONG_3"} & toks:
             return "MOYENNE", "Remplissage : PRIORITY_2/STRONG_2/STRONG_3 → MOYENNE"
         if {"PRIORITY_3", "DEFAULT_PENALTY"} & toks or any(t.startswith("SOFT_") for t in toks):
-            return "SOU PLE", "Remplissage : PRIORITY_3/DEFAULT_PENALTY/SOFT_* → SOUPLE"
+            return "SOUPLE", "Remplissage : PRIORITY_3/DEFAULT_PENALTY/SOFT_* → SOUPLE"
         # Aucun token connu : on laisse SOUPLE
         return niveau, rule
 
@@ -200,14 +171,14 @@ def map_level(row) -> Tuple[str, str]:
     if any(t.startswith("STRONG_") for t in toks) or any(t.startswith("PRIORITY_") for t in toks) or "DEFAULT_PENALTY" in toks:
         return "MOYENNE", "Hors remplissage : STRONG_*/PRIORITY_*/DEFAULT → MOYENNE"
     if any(t.startswith("SOFT_") for t in toks):
-        return "SOU PLE", "Hors remplissage : SOFT_* → SOUPLE"
+        return "SOUPLE", "Hors remplissage : SOFT_* → SOUPLE"
 
     # Aucun mot-clé reconnu : on laisse SOUPLE
     return niveau, rule
 
 
 def color_for_level(level: str) -> str:
-    """Renvoie la couleur hex correspondante au niveau (DURE/MOYENNE/SOU PLE)."""
+    """Renvoie la couleur hex correspondante au niveau (DURE/MOYENNE/SOUPLE)."""
     l = (level or "").upper().replace("É", "E")
     if "DURE" in l:
         return COLOR_DURE
@@ -221,7 +192,7 @@ def color_for_level(level: str) -> str:
 # ------------------------------------------------------
 def build_summary(df: pd.DataFrame) -> pd.DataFrame:
     tmp = df.copy()
-    tmp["Niveau"] = tmp["Niveau"].fillna("SOU PLE")
+    tmp["Niveau"] = tmp["Niveau"].fillna("SOUPLE")
 
     piv = pd.pivot_table(
         tmp,
@@ -233,7 +204,7 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # On force l’ordre des colonnes
-    piv = piv.reindex(columns=["DURE", "MOYENNE", "SOU PLE"], fill_value=0)
+    piv = piv.reindex(columns=["DURE", "MOYENNE", "SOUPLE"], fill_value=0)
     piv["Total"] = piv.sum(axis=1)
     piv = piv.reset_index().rename(columns={"Type": "Rubrique"})
 
@@ -268,7 +239,7 @@ def to_excel_bytes(df_summary: pd.DataFrame, df_full: pd.DataFrame) -> bytes:
             ws.set_column(col_idx, col_idx, 25)
 
         # Coloration des colonnes par niveau
-        col_map = {"DURE": COLOR_DURE, "MOYENNE": COLOR_MOY, "SOU PLE": COLOR_SOFT}
+        col_map = {"DURE": COLOR_DURE, "MOYENNE": COLOR_MOY, "SOUPLE": COLOR_SOFT}
         for col_name, bg in col_map.items():
             if col_name in df_summary.columns:
                 col_idx = df_summary.columns.get_loc(col_name)
@@ -303,12 +274,25 @@ def to_excel_bytes(df_summary: pd.DataFrame, df_full: pd.DataFrame) -> bytes:
 
 
 # ------------------------------------------------------
-# Interface – Upload
+# Interface – Upload OU copier-coller
 # ------------------------------------------------------
 uploaded = st.file_uploader(
     "📁 Importer un fichier texte ou Excel de paramétrage",
     type=["txt", "csv", "xlsx", "xls"],
 )
+
+text_pasted = st.text_area(
+    "✂️ Ou collez directement ici le contenu de votre export (texte brut) :",
+    placeholder="PK;Type;Priorités;Équipes\n1536;OS4 - Jeudi MAT CS;HARD;ARE\n...",
+    height=180,
+)
+
+df_raw = None
+
+if uploaded is not None:
+    df_raw = read_uploaded_file(uploaded)
+elif text_pasted.strip():
+    df_raw = read_text_content(text_pasted)
 
 with st.expander("🔍 Exemple de structure attendue (mini)"):
     example_df = pd.DataFrame(
@@ -325,55 +309,53 @@ with st.expander("🔍 Exemple de structure attendue (mini)"):
     )
     st.dataframe(example_df, use_container_width=True)
 
-if uploaded:
-    df_raw = read_uploaded_file(uploaded)
-    if df_raw is not None:
-        try:
-            df_norm = normalize_cols(df_raw)
+if df_raw is not None:
+    try:
+        df_norm = normalize_cols(df_raw)
 
-            # Calcul Niveau + Règle
-            levels = df_norm.apply(map_level, axis=1, result_type="expand")
-            df_norm["Niveau"] = levels[0]
-            df_norm["Règle de mapping"] = levels[1]
+        # Calcul Niveau + Règle
+        levels = df_norm.apply(map_level, axis=1, result_type="expand")
+        df_norm["Niveau"] = levels[0]
+        df_norm["Règle de mapping"] = levels[1]
 
-            # Résumé
-            df_summary = build_summary(df_norm)
+        # Résumé
+        df_summary = build_summary(df_norm)
 
-            st.success("✅ Fichier chargé et interprété avec succès.")
+        st.success("✅ Données chargées et interprétées avec succès.")
 
-            with st.expander("Aperçu – Paramétrage harmonisé"):
-                st.dataframe(df_norm.head(50), use_container_width=True)
+        with st.expander("Aperçu – Paramétrage harmonisé"):
+            st.dataframe(df_norm.head(50), use_container_width=True)
 
-            with st.expander("Aperçu – Résumé par rubrique"):
-                st.dataframe(df_summary, use_container_width=True)
+        with st.expander("Aperçu – Résumé par rubrique"):
+            st.dataframe(df_summary, use_container_width=True)
 
-            # Export Excel
-            excel_bytes = to_excel_bytes(df_summary, df_norm)
-            st.download_button(
-                "⬇️ Télécharger l'Excel récapitulatif harmonisé",
-                data=excel_bytes,
-                file_name="Parametrage_Harmonise.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+        # Export Excel
+        excel_bytes = to_excel_bytes(df_summary, df_norm)
+        st.download_button(
+            "⬇️ Télécharger l'Excel récapitulatif harmonisé",
+            data=excel_bytes,
+            file_name="Parametrage_Harmonise.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
-            st.markdown("### 🔎 Rappels de mapping (mémo)")
-            st.markdown(
-                """
+        st.markdown("### 🔎 Rappels de mapping (mémo)")
+        st.markdown(
+            """
 **Hors _Remplissage des postes_ :**
 
 - `HARD` / `HARD_LOWER` → **DURE**
 - `STRONG_*` / `PRIORITY_*` / `DEFAULT_PENALTY` → **MOYENNE**
-- `SOFT_*` → **SOU PLE**
+- `SOFT_*` → **SOUPLE**
 
 **Pour _Remplissage des postes_ :**
 
 - `PRIORITY_1` / `HARD` / `STRONG_1` → **DURE** (poste à remplir en priorité extrême)
 - `PRIORITY_2` / `STRONG_2` / `STRONG_3` → **MOYENNE** (poste à remplir normalement)
-- `PRIORITY_3` / `DEFAULT_PENALTY` / `SOFT_*` → **SOU PLE** (poste à remplir en dernier)
+- `PRIORITY_3` / `DEFAULT_PENALTY` / `SOFT_*` → **SOUPLE** (poste à remplir en dernier)
 """
-            )
+        )
 
-        except Exception as e:
-            st.error(f"Erreur lors du traitement du fichier : {e}")
+    except Exception as e:
+        st.error(f"Erreur lors du traitement des données : {e}")
 else:
-    st.info("Charge un fichier de paramétrage pour générer l’Excel harmonisé.")
+    st.info("Importe un fichier **ou** colle le contenu de ton export pour générer l’Excel harmonisé.")
