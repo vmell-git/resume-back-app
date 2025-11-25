@@ -18,7 +18,7 @@ import streamlit as st
 # ------------------------------------------------------
 st.set_page_config(page_title="Hopia – Récap Paramétrage", layout="wide")
 
-st.title("📊 Hopia – Générateur d’Excel récapitulatif de paramétrage")
+st.title("📊 Hopia – Générateur d’Excel récapitulatif de paramétrage à partir du Back-Office")
 
 # ------------------------------------------------------
 # Couleurs pour l'export Excel
@@ -280,12 +280,12 @@ def to_excel_bytes(df_autres, df_remp, df_summary):
 # Interface utilisateur
 # ------------------------------------------------------
 uploaded = st.file_uploader(
-    "📁 Importer fichier de paramétrage",
+    "📁 Importer un fichier de paramétrage",
     type=["txt", "csv", "xlsx", "xls"],
 )
 
 text_pasted = st.text_area(
-    "✂️ Ou collez ici votre export brut :",
+    "✂️ Ou collez ici l'export brut du back-office ( copier-coller) :",
     height=200,
 )
 
