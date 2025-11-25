@@ -19,26 +19,6 @@ import streamlit as st
 st.set_page_config(page_title="Hopia – Récap Paramétrage", layout="wide")
 
 st.title("📊 Hopia – Générateur d’Excel récapitulatif de paramétrage")
-st.markdown(
-    """
-Cette application permet de passer d’un **paramétrage brut** (exporté sous forme de fichier texte ou Excel)
-à un **Excel harmonisé** avec les niveaux de contraintes **DURE / MOYENNE / SOUPLE**.
-
-**Formats acceptés :**
-- Fichier texte `.txt` (copié-collé d’un Excel, colonnes séparées par `;`, tab, `,` ou espaces)
-- Fichier `.csv`
-- Fichier Excel `.xlsx` / `.xls`
-- **OU copier-coller directement le contenu dans la zone prévue**
-
-**Colonnes attendues (au minimum) :**
-- `PK`
-- `Type`
-- `Priorités`
-- `Équipes`
-
-Les autres colonnes sont conservées dans la sortie.
-"""
-)
 
 # ------------------------------------------------------
 # Couleurs pour l'export Excel
@@ -60,12 +40,9 @@ def parse_vertical_blocks(content: str) -> pd.DataFrame:
     Intitulé [TAB ou 2+ espaces] Type
     (une ou plusieurs lignes de Priorités)
     Équipes
-
-    Exemple concret : le gros bloc 'Urgentistes' fourni.
     """
     lines = [l.strip() for l in content.splitlines()]
-    # On enlève les lignes vides
-    lines = [l for l in lines if l]
+    lines = [l for l in lines if l]  # on enlève les lignes vides
 
     # On avance jusqu'à la première ligne qui ressemble à un PK numérique
     i = 0
@@ -88,7 +65,6 @@ def parse_vertical_blocks(content: str) -> pd.DataFrame:
 
     while i < len(lines):
         if not looks_like_pk(lines[i]):
-            # Si on tombe sur autre chose qu'un PK, on avance
             i += 1
             continue
 
@@ -198,19 +174,15 @@ def read_uploaded_file(uploaded_file) -> pd.DataFrame | None:
     if name.endswith((".xlsx", ".xls")):
         return pd.read_excel(uploaded_file)
 
-    # CSV classique
     if name.endswith(".csv"):
-        # sep=None + engine="python" → détection automatique du séparateur
         return pd.read_csv(uploaded_file, sep=None, engine="python")
 
-    # Fichier texte brut
     if name.endswith(".txt"):
         raw_bytes = uploaded_file.read()
         try:
             content = raw_bytes.decode("utf-8")
         except UnicodeDecodeError:
             content = raw_bytes.decode("latin-1")
-
         return read_text_content(content)
 
     st.error("Format de fichier non supporté. Utilise un .txt, .csv ou .xlsx.")
@@ -224,22 +196,19 @@ def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
     """
     - Harmonise les noms de colonnes (strip)
     - S'assure que PK, Type, Priorités, Équipes existent
-    - Crée 'Intitulé' si absent (copie de Type pour la lisibilité)
+    - Crée 'Intitulé' si absent (copie de Type)
     """
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Colonnes obligatoires minimales
     needed = ["PK", "Type", "Priorités", "Équipes"]
     for col in needed:
         if col not in df.columns:
             df[col] = None
 
-    # Intitulé : si absent, on duplique Type pour avoir un libellé lisible
     if "Intitulé" not in df.columns:
         df["Intitulé"] = df["Type"]
 
-    # Ordre des colonnes (les autres suivront)
     front = ["PK", "Intitulé", "Type", "Priorités", "Équipes"]
     front_existing = [c for c in front if c in df.columns]
     others = [c for c in df.columns if c not in front_existing]
@@ -256,8 +225,6 @@ def token_set(priorites: str) -> set:
         return set()
     txt = str(priorites).upper()
 
-    # On capture les mots-clés même dans des expressions du type
-    # "2 < SOFT_2 ≤ 3 3 < PRIORITY_1 ≤ 4"
     parts = re.findall(
         r"(HARD(?:_LOWER)?|SOFT_\d|STRONG_\d|PRIORITY_\d|DEFAULT_PENALTY|PRIVATE_ALGO_1)",
         txt
@@ -272,7 +239,7 @@ def map_level(row) -> Tuple[str, str]:
     """
     Retourne (Niveau, Règle utilisée) en fonction de :
     - Type de contrainte (Remplissage des postes ou non)
-    - Priorités (HARD, SOFT_x, PRIORITY_x, STRONG_x, HARD_LOWER, DEFAULT_PENALTY)
+    - Priorités
     """
     type_txt = str(row.get("Type", "")).strip().lower()
     prio_raw = str(row.get("Priorités", ""))
@@ -280,12 +247,10 @@ def map_level(row) -> Tuple[str, str]:
 
     is_remplissage = "remplissage des postes" in type_txt
 
-    # Valeur par défaut si on ne comprend rien → SOUPLE
-    niveau = "SOU PLE"
+    niveau = "SOUPLE"
     rule = "SOFT_* → SOUPLE (fallback)"
 
     if is_remplissage:
-        # Cas particulier des postes à remplir
         if {"PRIORITY_1", "HARD", "STRONG_1"} & toks:
             return "DURE", "Remplissage : PRIORITY_1/HARD/STRONG_1 → DURE"
         if {"PRIORITY_2", "STRONG_2", "STRONG_3"} & toks:
@@ -294,11 +259,9 @@ def map_level(row) -> Tuple[str, str]:
             {"PRIORITY_3", "DEFAULT_PENALTY"} & toks
             or any(t.startswith("SOFT_") for t in toks)
         ):
-            return "SOU PLE", "Remplissage : PRIORITY_3/DEFAULT_PENALTY/SOFT_* → SOUPLE"
-        # Aucun token connu : on laisse SOUPLE
+            return "SOUPLE", "Remplissage : PRIORITY_3/DEFAULT_PENALTY/SOFT_* → SOUPLE"
         return niveau, rule
 
-    # Cas général (hors Remplissage des postes)
     if "HARD" in toks or "HARD_LOWER" in toks:
         return "DURE", "Hors remplissage : HARD/HARD_LOWER → DURE"
     if (
@@ -309,18 +272,17 @@ def map_level(row) -> Tuple[str, str]:
     ):
         return "MOYENNE", "Hors remplissage : STRONG_*/PRIORITY_*/DEFAULT/PRIVATE → MOYENNE"
     if any(t.startswith("SOFT_") for t in toks):
-        return "SOU PLE", "Hors remplissage : SOFT_* → SOUPLE"
+        return "SOUPLE", "Hors remplissage : SOFT_* → SOUPLE"
 
-    # Aucun mot-clé reconnu : on laisse SOUPLE
     return niveau, rule
 
 
 def color_for_level(level: str) -> str:
-    """Renvoie la couleur hex correspondante au niveau (DURE/MOYENNE/SOU PLE)."""
+    """Renvoie la couleur hex correspondante au niveau (DURE/MOYENNE/SOUPLE)."""
     l = (level or "").upper().replace("É", "E")
     if "DURE" in l:
         return COLOR_DURE
-    if "MOY" in l:  # MOYENNE
+    if "MOY" in l:
         return COLOR_MOY
     return COLOR_SOFT
 
@@ -330,7 +292,7 @@ def color_for_level(level: str) -> str:
 # ------------------------------------------------------
 def build_summary(df: pd.DataFrame) -> pd.DataFrame:
     tmp = df.copy()
-    tmp["Niveau"] = tmp["Niveau"].fillna("SOU PLE")
+    tmp["Niveau"] = tmp["Niveau"].fillna("SOUPLE")
 
     piv = pd.pivot_table(
         tmp,
@@ -338,11 +300,10 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
         columns="Niveau",
         values="PK",
         aggfunc="count",
-        fill_value=0
+        fill_value=0,
     )
 
-    # On force l’ordre des colonnes
-    piv = piv.reindex(columns=["DURE", "MOYENNE", "SOU PLE"], fill_value=0)
+    piv = piv.reindex(columns=["DURE", "MOYENNE", "SOUPLE"], fill_value=0)
     piv["Total"] = piv.sum(axis=1)
     piv = piv.reset_index().rename(columns={"Type": "Rubrique"})
 
@@ -351,9 +312,10 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 # ------------------------------------------------------
 # Construction du fichier Excel
+# (df_full = seulement Intitulé / Type / Equipe / Niveau)
 # ------------------------------------------------------
 def to_excel_bytes(df_summary: pd.DataFrame, df_full: pd.DataFrame) -> bytes:
-    import xlsxwriter  # utilisé par pandas.ExcelWriter(engine='xlsxwriter')
+    import xlsxwriter
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -371,13 +333,11 @@ def to_excel_bytes(df_summary: pd.DataFrame, df_full: pd.DataFrame) -> bytes:
             }
         )
 
-        # Largeur + header
         for col_idx, col_name in enumerate(df_summary.columns):
             ws.write(0, col_idx, col_name, fmt_header)
             ws.set_column(col_idx, col_idx, 25)
 
-        # Coloration des colonnes par niveau
-        col_map = {"DURE": COLOR_DURE, "MOYENNE": COLOR_MOY, "SOU PLE": COLOR_SOFT}
+        col_map = {"DURE": COLOR_DURE, "MOYENNE": COLOR_MOY, "SOUPLE": COLOR_SOFT}
         for col_name, bg in col_map.items():
             if col_name in df_summary.columns:
                 col_idx = df_summary.columns.get_loc(col_name)
@@ -390,16 +350,14 @@ def to_excel_bytes(df_summary: pd.DataFrame, df_full: pd.DataFrame) -> bytes:
                     {"type": "no_errors", "format": fmt_lvl},
                 )
 
-        # Feuille 2 – Paramétrage harmonisé
+        # Feuille 2 – Paramétrage harmonisé (4 colonnes uniquement)
         df_full.to_excel(writer, sheet_name="Paramétrage harmonisé", index=False)
         ws2 = writer.sheets["Paramétrage harmonisé"]
 
-        # Header format
         for col_idx, col_name in enumerate(df_full.columns):
             ws2.write(0, col_idx, col_name, fmt_header)
             ws2.set_column(col_idx, col_idx, 28)
 
-        # Coloration par ligne en fonction de la colonne Niveau
         if "Niveau" in df_full.columns:
             for row_idx in range(1, len(df_full) + 1):
                 level = str(df_full.iloc[row_idx - 1]["Niveau"])
@@ -455,19 +413,29 @@ if df_raw is not None:
         df_norm["Niveau"] = levels[0]
         df_norm["Règle de mapping"] = levels[1]
 
-        # Résumé
-        df_summary = build_summary(df_norm)
+        # 🔹 Filtrage : on enlève Demandes d'absence / Demandes de travail
+        mask = ~df_norm["Type"].astype(str).str.strip().isin(
+            ["Demandes d'absence", "Demandes de travail"]
+        )
+        df_filtered = df_norm[mask].copy()
 
-        st.success("✅ Données chargées et interprétées avec succès.")
+        # Résumé (sur le df filtré, on garde PK pour le pivot)
+        df_summary = build_summary(df_filtered)
 
-        with st.expander("Aperçu – Paramétrage harmonisé"):
-            st.dataframe(df_norm.head(50), use_container_width=True)
+        # 🔹 DataFrame à exporter : seulement Intitulé / Type / Equipe / Niveau
+        df_export = df_filtered[["Intitulé", "Type", "Équipes", "Niveau"]].copy()
+        df_export = df_export.rename(columns={"Équipes": "Equipe"})
+
+        st.success("✅ Données chargées, filtrées et interprétées avec succès.")
+
+        with st.expander("Aperçu – Paramétrage harmonisé (colonnes exportées)"):
+            st.dataframe(df_export.head(50), use_container_width=True)
 
         with st.expander("Aperçu – Résumé par rubrique"):
             st.dataframe(df_summary, use_container_width=True)
 
         # Export Excel
-        excel_bytes = to_excel_bytes(df_summary, df_norm)
+        excel_bytes = to_excel_bytes(df_summary, df_export)
         st.download_button(
             "⬇️ Télécharger l'Excel récapitulatif harmonisé",
             data=excel_bytes,
@@ -482,13 +450,13 @@ if df_raw is not None:
 
 - `HARD` / `HARD_LOWER` → **DURE**
 - `STRONG_*` / `PRIORITY_*` / `DEFAULT_PENALTY` / `PRIVATE_ALGO_1` → **MOYENNE**
-- `SOFT_*` → **SOU PLE**
+- `SOFT_*` → **SOUPLE**
 
 **Pour _Remplissage des postes_ :**
 
-- `PRIORITY_1` / `HARD` / `STRONG_1` → **DURE** (poste à remplir en priorité extrême)
-- `PRIORITY_2` / `STRONG_2` / `STRONG_3` → **MOYENNE** (poste à remplir normalement)
-- `PRIORITY_3` / `DEFAULT_PENALTY` / `SOFT_*` → **SOU PLE** (poste à remplir en dernier)
+- `PRIORITY_1` / `HARD` / `STRONG_1` → **DURE**
+- `PRIORITY_2` / `STRONG_2` / `STRONG_3` → **MOYENNE**
+- `PRIORITY_3` / `DEFAULT_PENALTY` / `SOFT_*` → **SOUPLE**
 """
         )
 
