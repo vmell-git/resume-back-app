@@ -275,7 +275,7 @@ def map_level(row) -> Tuple[str, str]:
             or any(t.startswith("SOFT_") for t in toks)
         ):
             return "SOUPLE", "Remplissage : PRIORITY_3/DEFAULT_PENALTY/SOFT_* → SOUPLE"
-        # Aucun token connu : on laisse SOUPLE
+        # Aucun mot-clé connu : on laisse SOUPLE
         return niveau, rule
 
     # Cas général (hors Remplissage des postes)
@@ -360,7 +360,7 @@ def to_excel_bytes(df_summary: pd.DataFrame,
             ws.write(0, col_idx, col_name, fmt_header)
             ws.set_column(col_idx, col_idx, 25)
 
-        # Coloration des colonnes par niveau
+        # Coloration des colonnes par niveau sur la feuille de résumé
         col_map = {"DURE": COLOR_DURE, "MOYENNE": COLOR_MOY, "SOUPLE": COLOR_SOFT}
         for col_name, bg in col_map.items():
             if col_name in df_summary.columns:
@@ -382,12 +382,14 @@ def to_excel_bytes(df_summary: pd.DataFrame,
             ws2.write(0, col_idx, col_name, fmt_header)
             ws2.set_column(col_idx, col_idx, 28)
 
-        if "Niveau" in df_autres.columns:
+        # Coloration uniquement de la colonne Niveau
+        if "Niveau" in df_autres.columns and not df_autres.empty:
+            niveau_col = df_autres.columns.get_loc("Niveau")
             for row_idx in range(1, len(df_autres) + 1):
                 level = str(df_autres.iloc[row_idx - 1]["Niveau"])
                 bg = color_for_level(level)
-                fmt_row = wb.add_format({"bg_color": bg})
-                ws2.set_row(row_idx, None, fmt_row)
+                fmt = wb.add_format({"bg_color": bg})
+                ws2.write(row_idx, niveau_col, level, fmt)
 
         # -------- Feuille 3 – Remplissage des postes --------
         df_remp.to_excel(writer, sheet_name="Paramétrage – Remplissage", index=False)
@@ -397,12 +399,14 @@ def to_excel_bytes(df_summary: pd.DataFrame,
             ws3.write(0, col_idx, col_name, fmt_header)
             ws3.set_column(col_idx, col_idx, 28)
 
-        if "Niveau" in df_remp.columns:
+        # Coloration uniquement de la colonne Niveau
+        if "Niveau" in df_remp.columns and not df_remp.empty:
+            niveau_col = df_remp.columns.get_loc("Niveau")
             for row_idx in range(1, len(df_remp) + 1):
                 level = str(df_remp.iloc[row_idx - 1]["Niveau"])
                 bg = color_for_level(level)
-                fmt_row = wb.add_format({"bg_color": bg})
-                ws3.set_row(row_idx, None, fmt_row)
+                fmt = wb.add_format({"bg_color": bg})
+                ws3.write(row_idx, niveau_col, level, fmt)
 
     return output.getvalue()
 
@@ -458,6 +462,14 @@ if df_raw is not None:
         )
         df_filtered = df_norm[mask].copy()
 
+        # 🔹 Ordre custom pour le Niveau (DURE → MOYENNE → SOUPLE)
+        niveau_order = pd.CategoricalDtype(
+            categories=["DURE", "MOYENNE", "SOUPLE"],
+            ordered=True,
+        )
+        df_filtered["Niveau"] = df_filtered["Niveau"].astype(str).str.upper()
+        df_filtered["Niveau"] = df_filtered["Niveau"].astype(niveau_order)
+
         # Résumé (sur le df filtré, on garde PK pour le pivot)
         df_summary = build_summary(df_filtered)
 
@@ -469,7 +481,11 @@ if df_raw is not None:
         df_autres = df_filtered[~is_remplissage][["Intitulé", "Type", "Equipe", "Niveau"]].copy()
         df_remp = df_filtered[is_remplissage][["Intitulé", "Type", "Equipe", "Niveau"]].copy()
 
-        st.success("✅ Données chargées, filtrées et interprétées avec succès.")
+        # 🔹 Tri : d'abord par Type, puis par Niveau (DURE, MOYENNE, SOUPLE), puis Intitulé
+        df_autres = df_autres.sort_values(by=["Type", "Niveau", "Intitulé"])
+        df_remp = df_remp.sort_values(by=["Type", "Niveau", "Intitulé"])
+
+        st.success("✅ Données chargées, filtrées, triées et interprétées avec succès.")
 
         with st.expander("Aperçu – Autres contraintes (exportées)"):
             st.dataframe(df_autres.head(50), use_container_width=True)
