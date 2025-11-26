@@ -396,12 +396,12 @@ def to_excel_bytes(df_autres: pd.DataFrame,
 # Interface – Upload OU copier-coller
 # ------------------------------------------------------
 uploaded = st.file_uploader(
-    "📁 Importer un fichier texte ou Excel de paramétrage",
+    "📁 Importer un Excel de paramétrage",
     type=["txt", "csv", "xlsx", "xls"],
 )
 
 text_pasted = st.text_area(
-    "✂️ Ou collez directement ici le contenu de votre export :",
+    "✂️ Ou collez directement ici le contenu du Back-Office :",
     placeholder="PK\tType\tPriorités\tÉquipes\n549\tPas de MAO...\n...",
     height=200,
 )
@@ -475,4 +475,4 @@ if df_raw is not None:
     except Exception as e:
         st.error(f"Erreur lors du traitement des données : {e}")
 else:
-    st.info("Importe un fichier **ou** colle le contenu de ton export pour générer l’Excel harmonisé.")
+    st.info("Importe un fichier **ou** colle le contenu du Back-Office pour générer l’Excel de paramétrage.")
