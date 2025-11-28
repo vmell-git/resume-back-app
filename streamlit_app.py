@@ -29,6 +29,27 @@ COLOR_SOFT = "#ccffcc"
 COLOR_HEADER = "#003366"
 COLOR_HEADER_TXT = "#FFFFFF"
 
+# ------------------------------------------------------
+# Ordre hiérarchique des tokens de priorité
+# ------------------------------------------------------
+PRIORITY_ORDER = [
+    "HARD",
+    "HARD_LOWER",
+    "PRIORITY_1",
+    "PRIORITY_2",
+    "PRIORITY_3",
+    "DEFAULT_PENALTY",
+    "STRONG_1",
+    "STRONG_2",
+    "STRONG_3",
+    "PRIVATE_ALGO_1",
+    "PRIVATE_ALGO_2",
+    "PRIVATE_ALGO_3",
+    "SOFT_1",
+    "SOFT_2",
+    "SOFT_3",
+]
+
 
 # ------------------------------------------------------
 # Parseur pour le format vertical (exemple Urgentistes)
@@ -54,7 +75,7 @@ def parse_vertical_blocks(content: str) -> pd.DataFrame:
     def looks_like_priority(s: str) -> bool:
         return bool(
             re.search(
-                r"(HARD(?:_LOWER)?|SOFT_\d|STRONG_\d|PRIORITY_\d|DEFAULT_PENALTY|PRIVATE_ALGO_1|<|>|≤|>=|≥)",
+                r"(HARD(?:_LOWER)?|SOFT_\d|STRONG_\d|PRIORITY_\d|DEFAULT_PENALTY|PRIVATE_ALGO_\d|<|>|≤|>=|≥)",
                 s,
             )
         )
@@ -196,9 +217,32 @@ def token_set(priorites: str) -> set:
         return set()
     txt = str(priorites).upper()
     parts = re.findall(
-        r"(HARD(?:_LOWER)?|SOFT_\d|STRONG_\d|PRIORITY_\d|DEFAULT_PENALTY|PRIVATE_ALGO_1)", txt
+        r"(HARD(?:_LOWER)?"
+        r"|SOFT_\d"
+        r"|STRONG_\d"
+        r"|PRIORITY_\d"
+        r"|DEFAULT_PENALTY"
+        r"|PRIVATE_ALGO_\d)",
+        txt,
     )
     return set(parts)
+
+
+# ------------------------------------------------------
+# Fonction utilitaire : token principal pour un remplissage
+# ------------------------------------------------------
+def main_priority_token(priorites: str) -> str | None:
+    """
+    Renvoie le token de priorité "principal" d'une ligne,
+    en prenant le premier dans PRIORITY_ORDER trouvé dans les tokens de la ligne.
+    """
+    toks = token_set(priorites)
+    if not toks:
+        return None
+    for t in PRIORITY_ORDER:
+        if t in toks:
+            return t
+    return None
 
 
 # ------------------------------------------------------
@@ -210,17 +254,32 @@ def map_level(row) -> Tuple[str, str]:
 
     is_remplissage = "remplissage des postes" in type_txt
 
+    # Valeur par défaut
     niveau = "SOUPLE"
-    rule = "SOFT_* → SOUPLE (fallback)"
+    rule = "Aucune priorité détectée → SOUPLE (fallback)"
 
     if is_remplissage:
         if {"HARD_LOWER", "HARD"} & toks:
             return "DURE", "Remplissage : HARD/HARD_LOWER → DURE"
-        if {"PRIORITY_1","PRIORITY_2","PRIORITY_3","DEFAULT_PENALTY","STRONG_1","STRONG_2", "STRONG_3"} & toks:
-            return "MOYENNE", "Remplissage : PRIORITY_1/PRIORITY_2/PRIORITY_3/DEFAULT_PENALTY/STRONG_1/STRONG_2/STRONG_3 → MOYENNE"
+        if {
+            "PRIORITY_1",
+            "PRIORITY_2",
+            "PRIORITY_3",
+            "DEFAULT_PENALTY",
+            "STRONG_1",
+            "STRONG_2",
+            "STRONG_3",
+        } & toks:
+            return (
+                "MOYENNE",
+                "Remplissage : PRIORITY_1/PRIORITY_2/PRIORITY_3/DEFAULT_PENALTY/"
+                "STRONG_1/STRONG_2/STRONG_3 → MOYENNE",
+            )
         if (
-            {"PRIVATE_ALGO_1","PRIVATE_ALGO_2","PRIVATE_ALGO_3","SOFT_1","SOFT_2","SOFT_3"} & toks
-            or any(t.startswith("SOFT_") for t in toks)):
+            {"PRIVATE_ALGO_1", "PRIVATE_ALGO_2", "PRIVATE_ALGO_3", "SOFT_1", "SOFT_2", "SOFT_3"}
+            & toks
+            or any(t.startswith("SOFT_") for t in toks)
+        ):
             return "SOUPLE", "Remplissage : PRIVATE_ALGO_*/SOFT_* → SOUPLE"
         return niveau, rule
 
@@ -231,9 +290,8 @@ def map_level(row) -> Tuple[str, str]:
         or any(t.startswith("PRIORITY_") for t in toks)
         or "DEFAULT_PENALTY" in toks
     ):
-        return "MOYENNE", "Hors remplissage : STRONG_*/PRIORITY_*/DEFAULT/PRIVATE → MOYENNE"
-    if (any(t.startswith("SOFT_") for t in toks)
-    or any(t.startswith("PRIVATE_ALGO_") for t in toks)):
+        return "MOYENNE", "Hors remplissage : STRONG_*/PRIORITY_*/DEFAULT_PENALTY → MOYENNE"
+    if any(t.startswith("SOFT_") for t in toks) or any(t.startswith("PRIVATE_ALGO_") for t in toks):
         return "SOUPLE", "Hors remplissage : SOFT_*/PRIVATE_ALGO_* → SOUPLE"
 
     return niveau, rule
@@ -275,9 +333,11 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
 # Construction du fichier Excel
 # (Résumé en dernière feuille, nommée "Résumé")
 # ------------------------------------------------------
-def to_excel_bytes(df_autres: pd.DataFrame,
-                   df_remp: pd.DataFrame,
-                   df_summary: pd.DataFrame) -> bytes:
+def to_excel_bytes(
+    df_autres: pd.DataFrame,
+    df_remp: pd.DataFrame,
+    df_summary: pd.DataFrame,
+) -> bytes:
     import xlsxwriter
     from xlsxwriter.utility import xl_col_to_name
 
@@ -308,8 +368,6 @@ def to_excel_bytes(df_autres: pd.DataFrame,
             border_fmt = wb.add_format({"top": 2})  # 2 ~ bordure épaisse
 
             nrows, ncols = df.shape
-            # On applique à toutes les colonnes de chaque ligne,
-            # mais seulement à partir de la 2e ligne de données
             ws.conditional_format(
                 1,
                 0,
@@ -345,23 +403,13 @@ def to_excel_bytes(df_autres: pd.DataFrame,
         add_type_borders(ws2, df_autres, "Type")
 
         # === Feuille 2 – Paramétrage – Remplissage ===
+        # Ici, df_remp contient déjà la colonne "Ordre de priorité"
         df_remp.to_excel(writer, sheet_name="Paramétrage – Remplissage", index=False)
         ws3 = writer.sheets["Paramétrage – Remplissage"]
 
         for col_idx, col in enumerate(df_remp.columns):
             ws3.write(0, col_idx, col, fmt_header)
             ws3.set_column(col_idx, col_idx, 28)
-
-        if not df_remp.empty and "Niveau" in df_remp.columns:
-            niveau_col = df_remp.columns.get_loc("Niveau")
-            for row_idx in range(1, len(df_remp) + 1):
-                val = str(df_remp.iloc[row_idx - 1]["Niveau"])
-                ws3.write(
-                    row_idx,
-                    niveau_col,
-                    val,
-                    wb.add_format({"bg_color": color_for_level(val)}),
-                )
 
         # >>> Bordure épaisse entre chaque Type de contrainte
         add_type_borders(ws3, df_remp, "Type")
@@ -416,6 +464,7 @@ if df_raw is not None:
     try:
         df_norm = normalize_cols(df_raw)
 
+        # Calcul du niveau global (toujours présent dans df_norm)
         levels = df_norm.apply(map_level, axis=1, result_type="expand")
         df_norm["Niveau"] = levels[0]
         df_norm["Règle de mapping"] = levels[1]
@@ -436,22 +485,54 @@ if df_raw is not None:
             df_filtered["Niveau"].astype(str).str.upper().astype(niveau_order)
         )
 
-        # Résumé global
+        # Résumé global (toutes contraintes confondues)
         df_summary = build_summary(df_filtered)
 
         # Colonne Equipe pour sortie
         df_filtered["Equipe"] = df_filtered["Équipes"]
 
-        # >>> CORRECTION ICI : détection des Remplissages par CONTAINS <<<
+        # Détection des Remplissages
         type_series = df_filtered["Type"].fillna("").astype(str).str.lower()
         is_rem = type_series.str.contains("remplissage des postes")
 
-        df_autres = df_filtered.loc[~is_rem, ["Intitulé", "Type", "Equipe", "Niveau"]].copy()
-        df_remp = df_filtered.loc[is_rem, ["Intitulé", "Type", "Equipe", "Niveau"]].copy()
-
-        # Tri par Type, Niveau, Intitulé
+        # === Autres contraintes : on garde Niveau (comme avant) ===
+        df_autres = df_filtered.loc[
+            ~is_rem, ["Intitulé", "Type", "Equipe", "Niveau"]
+        ].copy()
         df_autres = df_autres.sort_values(by=["Type", "Niveau", "Intitulé"])
-        df_remp = df_remp.sort_values(by=["Type", "Niveau", "Intitulé"])
+
+        # === Remplissages : on calcule un ordre de priorité numérique ===
+        df_remp_raw = df_filtered.loc[
+            is_rem, ["Intitulé", "Type", "Equipe", "Priorités"]
+        ].copy()
+
+        # Token principal par ligne de remplissage
+        df_remp_raw["Token principal"] = df_remp_raw["Priorités"].apply(
+            main_priority_token
+        )
+
+        # Liste des tokens réellement présents, dans l'ordre défini par PRIORITY_ORDER
+        tokens_present = [
+            t
+            for t in PRIORITY_ORDER
+            if t in df_remp_raw["Token principal"].dropna().unique()
+        ]
+
+        # Construction du mapping token -> rang (1, 2, 3, …)
+        priority_rank_map = {t: i + 1 for i, t in enumerate(tokens_present)}
+
+        # Application à chaque ligne
+        df_remp_raw["Ordre de priorité"] = df_remp_raw["Token principal"].map(
+            priority_rank_map
+        )
+
+        # DataFrame final pour la feuille "Paramétrage – Remplissage"
+        df_remp = df_remp_raw[["Intitulé", "Type", "Equipe", "Ordre de priorité"]].copy()
+
+        # Tri : par Type, puis par ordre de priorité (1,2,3…), puis Intitulé
+        df_remp = df_remp.sort_values(
+            by=["Type", "Ordre de priorité", "Intitulé"], na_position="last"
+        )
 
         st.success("✅ Données chargées, filtrées et interprétées avec succès.")
 
@@ -475,4 +556,6 @@ if df_raw is not None:
     except Exception as e:
         st.error(f"Erreur lors du traitement des données : {e}")
 else:
-    st.info("Importe un fichier **ou** colle le contenu du Back-Office pour générer l’Excel de paramétrage.")
+    st.info(
+        "Importe un fichier **ou** colle le contenu du Back-Office pour générer l’Excel de paramétrage."
+    )
