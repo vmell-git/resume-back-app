@@ -4,6 +4,7 @@
 # Entrées possibles :
 #   - Fichier brut (TXT / CSV / XLSX)
 #   - Copier-coller de texte brut (y compris format vertical type Urgentistes)
+#   - Copier-coller des Permissions des membres (Back-Office)
 # ------------------------------------------------------
 
 import io
@@ -17,7 +18,6 @@ import streamlit as st
 # Configuration Streamlit
 # ------------------------------------------------------
 st.set_page_config(page_title="Hopia – Récap Paramétrage", layout="wide")
-
 st.title("📊 Hopia – Générateur d’Excel récapitulatif de paramétrage")
 
 # ------------------------------------------------------
@@ -30,7 +30,7 @@ COLOR_HEADER = "#003366"
 COLOR_HEADER_TXT = "#FFFFFF"
 
 # ------------------------------------------------------
-# Ordre hiérarchique des tokens de priorité
+# Ordre hiérarchique des tokens de priorité (Remplissage)
 # ------------------------------------------------------
 PRIORITY_ORDER = [
     "HARD",
@@ -49,7 +49,6 @@ PRIORITY_ORDER = [
     "SOFT_2",
     "SOFT_3",
 ]
-
 
 # ------------------------------------------------------
 # Parseur pour le format vertical (exemple Urgentistes)
@@ -189,7 +188,7 @@ def read_uploaded_file(uploaded_file) -> pd.DataFrame | None:
 
 
 # ------------------------------------------------------
-# Normalisation des colonnes
+# Normalisation des colonnes (paramétrage)
 # ------------------------------------------------------
 def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -228,14 +227,7 @@ def token_set(priorites: str) -> set:
     return set(parts)
 
 
-# ------------------------------------------------------
-# Fonction utilitaire : token principal pour un remplissage
-# ------------------------------------------------------
 def main_priority_token(priorites: str) -> str | None:
-    """
-    Renvoie le token de priorité "principal" d'une ligne,
-    en prenant le premier dans PRIORITY_ORDER trouvé dans les tokens de la ligne.
-    """
     toks = token_set(priorites)
     if not toks:
         return None
@@ -254,7 +246,6 @@ def map_level(row) -> Tuple[str, str]:
 
     is_remplissage = "remplissage des postes" in type_txt
 
-    # Valeur par défaut
     niveau = "SOUPLE"
     rule = "Aucune priorité détectée → SOUPLE (fallback)"
 
@@ -325,18 +316,100 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
     piv = piv.reindex(columns=["DURE", "MOYENNE", "SOUPLE"], fill_value=0)
     piv["Total"] = piv.sum(axis=1)
     piv = piv.reset_index().rename(columns={"Type": "Rubrique"})
-
     return piv
 
 
 # ------------------------------------------------------
+# Parseur Permissions (copier-coller Back-Office)
+# ------------------------------------------------------
+def parse_permissions_text(content: str) -> pd.DataFrame | None:
+    """
+    Attend un tableau type :
+    Membre   Email   <Role>
+    Nom      mail    perm1, perm2, ...
+    ...
+
+    Le séparateur principal est le TAB, mais on accepte aussi 2+ espaces.
+    On ignore les lignes parasites ("Permissions des membres", "Filtrer par nom...", vides...).
+    """
+    content = (content or "").strip()
+    if not content:
+        return None
+
+    lines = [l.strip() for l in content.splitlines()]
+    lines = [l for l in lines if l]
+
+    # On garde les lignes qui ressemblent à des lignes tabulaires (avec tab ou au moins 2 espaces)
+    candidate_lines = [
+        l
+        for l in lines
+        if ("\t" in l) or re.search(r" {2,}", l)
+    ]
+
+    if not candidate_lines:
+        return None
+
+    # Trouver l'entête contenant "Membre" et "Email"
+    header_idx = None
+    header_cols = None
+    for idx, l in enumerate(candidate_lines):
+        cols = re.split(r"\t+| {2,}", l.strip())
+        cols_norm = [c.strip() for c in cols if c.strip()]
+        if len(cols_norm) >= 3 and cols_norm[0].lower() == "membre" and cols_norm[1].lower() == "email":
+            header_idx = idx
+            header_cols = cols_norm
+            break
+
+    if header_idx is None or not header_cols:
+        return None
+
+    # La 3e colonne est un "rôle"/colonne métier (ex: Pédiatre)
+    role_col = header_cols[2]
+
+    records = []
+    for l in candidate_lines[header_idx + 1 :]:
+        cols = re.split(r"\t+| {2,}", l.strip(), maxsplit=2)
+        cols = [c.strip() for c in cols]
+        if len(cols) < 3:
+            continue
+
+        membre, email, perms = cols[0], cols[1], cols[2]
+
+        # Filtre simple : on écarte les fausses lignes
+        if membre.lower() in {"filtrer", "filtrer par nom..."}:
+            continue
+        if "@" not in email:
+            continue
+
+        # Permissions : normalisation (liste triée pour lecture)
+        perm_list = [p.strip() for p in perms.split(",") if p.strip()]
+        perms_norm = ", ".join(perm_list)
+
+        records.append(
+            {
+                "Membre": membre,
+                "Email": email,
+                "Rôle": role_col,
+                "Permissions": perms_norm,
+            }
+        )
+
+    if not records:
+        return None
+
+    df = pd.DataFrame(records).sort_values(by=["Membre", "Email"])
+    return df
+
+
+# ------------------------------------------------------
 # Construction du fichier Excel
-# (Résumé en dernière feuille, nommée "Résumé")
+# + feuille Permissions si df_permissions non vide
 # ------------------------------------------------------
 def to_excel_bytes(
     df_autres: pd.DataFrame,
     df_remp: pd.DataFrame,
     df_summary: pd.DataFrame,
+    df_permissions: pd.DataFrame | None = None,
 ) -> bytes:
     import xlsxwriter
     from xlsxwriter.utility import xl_col_to_name
@@ -353,19 +426,13 @@ def to_excel_bytes(
             }
         )
 
-        # --- Petite fonction utilitaire pour ajouter une bordure épaisse
         def add_type_borders(ws, df: pd.DataFrame, col_name: str):
-            """
-            Ajoute une bordure horizontale épaisse entre chaque groupe
-            de valeurs différentes dans la colonne col_name.
-            """
             if df.empty or col_name not in df.columns:
                 return
 
             type_col_idx = df.columns.get_loc(col_name)
             col_letter = xl_col_to_name(type_col_idx)
-
-            border_fmt = wb.add_format({"top": 2})  # 2 ~ bordure épaisse
+            border_fmt = wb.add_format({"top": 2})
 
             nrows, ncols = df.shape
             ws.conditional_format(
@@ -380,7 +447,7 @@ def to_excel_bytes(
                 },
             )
 
-        # === Feuille 1 – Paramétrage – Autres ===
+        # === Feuille 1 – Paramétrage – Autres (inchangée) ===
         df_autres.to_excel(writer, sheet_name="Paramétrage – Autres", index=False)
         ws2 = writer.sheets["Paramétrage – Autres"]
 
@@ -399,11 +466,9 @@ def to_excel_bytes(
                     wb.add_format({"bg_color": color_for_level(val)}),
                 )
 
-        # >>> Bordure épaisse entre chaque Type de contrainte
         add_type_borders(ws2, df_autres, "Type")
 
-        # === Feuille 2 – Paramétrage – Remplissage ===
-        # Ici, df_remp contient déjà la colonne "Ordre de priorité"
+        # === Feuille 2 – Paramétrage – Remplissage (ordre de priorité) ===
         df_remp.to_excel(writer, sheet_name="Paramétrage – Remplissage", index=False)
         ws3 = writer.sheets["Paramétrage – Remplissage"]
 
@@ -411,10 +476,26 @@ def to_excel_bytes(
             ws3.write(0, col_idx, col, fmt_header)
             ws3.set_column(col_idx, col_idx, 28)
 
-        # >>> Bordure épaisse entre chaque Type de contrainte
         add_type_borders(ws3, df_remp, "Type")
 
-        # === Feuille 3 – Résumé (dernière feuille) ===
+        # === Feuille 3 – Permissions (si présent) ===
+        if df_permissions is not None and not df_permissions.empty:
+            df_permissions.to_excel(writer, sheet_name="Permissions", index=False)
+            wsp = writer.sheets["Permissions"]
+
+            for col_idx, col in enumerate(df_permissions.columns):
+                wsp.write(0, col_idx, col, fmt_header)
+                # largeurs adaptées
+                if col in ("Membre",):
+                    wsp.set_column(col_idx, col_idx, 30)
+                elif col in ("Email",):
+                    wsp.set_column(col_idx, col_idx, 30)
+                elif col in ("Rôle",):
+                    wsp.set_column(col_idx, col_idx, 18)
+                else:
+                    wsp.set_column(col_idx, col_idx, 80)
+
+        # === Feuille 4 – Résumé (inchangée) ===
         df_summary.to_excel(writer, sheet_name="Résumé", index=False)
         ws = writer.sheets["Résumé"]
 
@@ -434,14 +515,13 @@ def to_excel_bytes(
                     {"type": "no_errors", "format": wb.add_format({"bg_color": bg})},
                 )
 
-        # >>> Bordure épaisse entre chaque Rubrique (Type agrégé) dans le résumé
         add_type_borders(ws, df_summary, "Rubrique")
 
     return output.getvalue()
 
 
 # ------------------------------------------------------
-# Interface – Upload OU copier-coller
+# Interface – Upload OU copier-coller (Paramétrage)
 # ------------------------------------------------------
 uploaded = st.file_uploader(
     "📁 Importer un Excel de paramétrage",
@@ -449,11 +529,29 @@ uploaded = st.file_uploader(
 )
 
 text_pasted = st.text_area(
-    "✂️ Ou collez directement ici le contenu du Back-Office :",
+    "✂️ Ou collez directement ici le contenu du Back-Office (Paramétrage) :",
     placeholder="PK\tType\tPriorités\tÉquipes\n549\tPas de MAO...\n...",
     height=200,
 )
 
+# Nouvelle zone : Permissions
+permissions_pasted = st.text_area(
+    "🔐 Collez ici le contenu du Back-Office (Permissions des membres) :",
+    placeholder="Permissions des membres\n...\nMembre\tEmail\tPédiatre\nAlice\talice@...\tPlanningRead, PlanningWrite\n...",
+    height=200,
+)
+
+# Parsing permissions (optionnel)
+df_permissions = parse_permissions_text(permissions_pasted)
+if permissions_pasted.strip():
+    if df_permissions is None or df_permissions.empty:
+        st.warning("⚠️ Permissions : contenu détecté mais format non reconnu (vérifie que l'entête 'Membre Email <Rôle>' est bien présent).")
+    else:
+        st.success(f"✅ Permissions : {len(df_permissions)} membres détectés.")
+        with st.expander("Aperçu – Permissions"):
+            st.dataframe(df_permissions, use_container_width=True)
+
+# Parsing paramétrage (comme avant)
 df_raw = None
 if uploaded is not None:
     df_raw = read_uploaded_file(uploaded)
@@ -464,19 +562,16 @@ if df_raw is not None:
     try:
         df_norm = normalize_cols(df_raw)
 
-        # Calcul du niveau global (toujours présent dans df_norm)
         levels = df_norm.apply(map_level, axis=1, result_type="expand")
         df_norm["Niveau"] = levels[0]
         df_norm["Règle de mapping"] = levels[1]
 
-        # Filtrage : suppressions Demandes d'absence / Demandes de travail
         df_filtered = df_norm[
             ~df_norm["Type"].astype(str).str.strip().isin(
                 ["Demandes d'absence", "Demandes de travail"]
             )
         ].copy()
 
-        # Niveau avec ordre DURE > MOYENNE > SOUPLE
         niveau_order = pd.CategoricalDtype(
             categories=["DURE", "MOYENNE", "SOUPLE"],
             ordered=True,
@@ -485,56 +580,40 @@ if df_raw is not None:
             df_filtered["Niveau"].astype(str).str.upper().astype(niveau_order)
         )
 
-        # Résumé global (toutes contraintes confondues)
         df_summary = build_summary(df_filtered)
-
-        # Colonne Equipe pour sortie
         df_filtered["Equipe"] = df_filtered["Équipes"]
 
-        # Détection des Remplissages
         type_series = df_filtered["Type"].fillna("").astype(str).str.lower()
         is_rem = type_series.str.contains("remplissage des postes")
 
-        # === Autres contraintes : on garde Niveau (comme avant) ===
+        # --- Autres (inchangé) ---
         df_autres = df_filtered.loc[
             ~is_rem, ["Intitulé", "Type", "Equipe", "Niveau"]
         ].copy()
         df_autres = df_autres.sort_values(by=["Type", "Niveau", "Intitulé"])
 
-        # === Remplissages : on calcule un ordre de priorité numérique ===
+        # --- Remplissage : ordre de priorité ---
         df_remp_raw = df_filtered.loc[
             is_rem, ["Intitulé", "Type", "Equipe", "Priorités"]
         ].copy()
 
-        # Token principal par ligne de remplissage
-        df_remp_raw["Token principal"] = df_remp_raw["Priorités"].apply(
-            main_priority_token
-        )
+        df_remp_raw["Token principal"] = df_remp_raw["Priorités"].apply(main_priority_token)
 
-        # Liste des tokens réellement présents, dans l'ordre défini par PRIORITY_ORDER
         tokens_present = [
             t
             for t in PRIORITY_ORDER
             if t in df_remp_raw["Token principal"].dropna().unique()
         ]
-
-        # Construction du mapping token -> rang (1, 2, 3, …)
         priority_rank_map = {t: i + 1 for i, t in enumerate(tokens_present)}
 
-        # Application à chaque ligne
-        df_remp_raw["Ordre de priorité"] = df_remp_raw["Token principal"].map(
-            priority_rank_map
-        )
+        df_remp_raw["Ordre de priorité"] = df_remp_raw["Token principal"].map(priority_rank_map)
 
-        # DataFrame final pour la feuille "Paramétrage – Remplissage"
         df_remp = df_remp_raw[["Intitulé", "Type", "Equipe", "Ordre de priorité"]].copy()
-
-        # Tri : par Type, puis par ordre de priorité (1,2,3…), puis Intitulé
         df_remp = df_remp.sort_values(
             by=["Type", "Ordre de priorité", "Intitulé"], na_position="last"
         )
 
-        st.success("✅ Données chargées, filtrées et interprétées avec succès.")
+        st.success("✅ Données paramétrage chargées, filtrées et interprétées avec succès.")
 
         with st.expander("Aperçu – Paramétrage – Autres"):
             st.dataframe(df_autres, use_container_width=True)
@@ -545,7 +624,7 @@ if df_raw is not None:
         with st.expander("Aperçu – Résumé"):
             st.dataframe(df_summary, use_container_width=True)
 
-        excel_bytes = to_excel_bytes(df_autres, df_remp, df_summary)
+        excel_bytes = to_excel_bytes(df_autres, df_remp, df_summary, df_permissions=df_permissions)
         st.download_button(
             "⬇️ Télécharger l'Excel récapitulatif harmonisé",
             data=excel_bytes,
@@ -556,6 +635,4 @@ if df_raw is not None:
     except Exception as e:
         st.error(f"Erreur lors du traitement des données : {e}")
 else:
-    st.info(
-        "Importe un fichier **ou** colle le contenu du Back-Office pour générer l’Excel de paramétrage."
-    )
+    st.info("Importe un fichier **ou** colle le contenu du Back-Office (Paramétrage) pour générer l’Excel.")
