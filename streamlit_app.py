@@ -529,14 +529,14 @@ uploaded = st.file_uploader(
 )
 
 text_pasted = st.text_area(
-    "✂️ Ou collez directement ici le contenu du Back-Office (Paramétrage) :",
+    "Ou collez directement ici le contenu du Back-Office (Paramétrage) :",
     placeholder="PK\tType\tPriorités\tÉquipes\n549\tPas de MAO...\n...",
     height=200,
 )
 
 # Nouvelle zone : Permissions
 permissions_pasted = st.text_area(
-    "🔐 Collez ici le contenu du Back-Office (Permissions des membres) :",
+    "Collez ici le contenu du Back-Office (Permissions des membres) :",
     placeholder="Permissions des membres\n...\nMembre\tEmail\tPédiatre\nAlice\talice@...\tPlanningRead, PlanningWrite\n...",
     height=200,
 )
