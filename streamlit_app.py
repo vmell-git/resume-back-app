@@ -523,13 +523,8 @@ def to_excel_bytes(
 # ------------------------------------------------------
 # Interface – Upload OU copier-coller (Paramétrage)
 # ------------------------------------------------------
-uploaded = st.file_uploader(
-    "📁 Importer un Excel de paramétrage",
-    type=["txt", "csv", "xlsx", "xls"],
-)
-
 text_pasted = st.text_area(
-    "Ou collez directement ici le contenu du Back-Office (Paramétrage) :",
+    "Collez directement ici le contenu du Back-Office (Paramétrage) :",
     placeholder="PK\tType\tPriorités\tÉquipes\n549\tPas de MAO...\n...",
     height=200,
 )
