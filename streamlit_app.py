@@ -80,7 +80,6 @@ PERM_TOKEN_TO_COLVAL = {t: (col, val) for (t, col, val) in PERMISSIONS_SPECS}
 PERM_COLUMNS = [col for (_, col, _) in PERMISSIONS_SPECS]
 _seen = set()
 PERM_COLUMNS = [c for c in PERM_COLUMNS if not (c in _seen or _seen.add(c))]
-
 PERM_RANK = {"X": 0, "Lecture seule": 1, "Modifications": 2, "Gestionnaire": 3}
 
 
@@ -470,7 +469,12 @@ def to_excel_bytes(
                 niveau_col = df_autres.columns.get_loc("Niveau")
                 for row_idx in range(1, len(df_autres) + 1):
                     val = str(df_autres.iloc[row_idx - 1]["Niveau"])
-                    ws2.write(row_idx, niveau_col, val, wb.add_format({"bg_color": color_for_level(val)}))
+                    ws2.write(
+                        row_idx,
+                        niveau_col,
+                        val,
+                        wb.add_format({"bg_color": color_for_level(val)}),
+                    )
 
             add_type_borders(ws2, df_autres, "Type")
 
@@ -532,7 +536,7 @@ uploaded = st.file_uploader(
 
 text_pasted = st.text_area(
     "✂️ Collez ici le contenu du Back-Office (Paramétrage) (optionnel) :",
-    placeholder="PK\tType\tPriorités\tÉquipes\n549\tPas de MAO...\n...",
+    placeholder="PK\tType\tPriorités\tÉquipes\n549\tType...\n...",
     height=200,
 )
 
@@ -542,19 +546,30 @@ permissions_pasted = st.text_area(
     height=200,
 )
 
-# --- Permissions ---
-df_permissions_matrix = None
+# ------------------------------------------------------
+# Permissions (stockées en session_state pour survivre aux reruns)
+# ------------------------------------------------------
+if "df_permissions_matrix" not in st.session_state:
+    st.session_state["df_permissions_matrix"] = None
+
 if permissions_pasted.strip():
     df_perm_long = parse_permissions_text(permissions_pasted)
     if df_perm_long is None or df_perm_long.empty:
+        st.session_state["df_permissions_matrix"] = None
         st.warning("⚠️ Permissions : format non reconnu (vérifie l'entête 'Membre  Email  <Rôle>').")
     else:
-        df_permissions_matrix = build_permissions_matrix(df_perm_long)
-        st.success(f"✅ Permissions : {len(df_permissions_matrix)} membres détectés.")
+        st.session_state["df_permissions_matrix"] = build_permissions_matrix(df_perm_long)
+        st.success(f"✅ Permissions : {len(st.session_state['df_permissions_matrix'])} membres détectés.")
         with st.expander("Aperçu – Permissions (matrice)"):
-            st.dataframe(df_permissions_matrix, use_container_width=True)
+            st.dataframe(st.session_state["df_permissions_matrix"], use_container_width=True)
+elif permissions_pasted == "":
+    st.session_state["df_permissions_matrix"] = None
 
-# --- Paramétrage ---
+df_permissions_matrix = st.session_state["df_permissions_matrix"]
+
+# ------------------------------------------------------
+# Paramétrage
+# ------------------------------------------------------
 df_autres = None
 df_remp = None
 df_summary = None
@@ -626,25 +641,31 @@ if df_raw is not None:
     except Exception as e:
         st.error(f"Erreur lors du traitement des données paramétrage : {e}")
 
-# --- Export : autorisé si au moins permissions OU paramétrage ---
-has_anything = (
-    (df_permissions_matrix is not None and not df_permissions_matrix.empty)
-    or (df_autres is not None and not df_autres.empty)
+# ------------------------------------------------------
+# Export : autorisé si au moins permissions OU paramétrage
+# (split explicite + nom de fichier adapté)
+# ------------------------------------------------------
+has_permissions = df_permissions_matrix is not None and not df_permissions_matrix.empty
+has_param = (
+    (df_autres is not None and not df_autres.empty)
     or (df_remp is not None and not df_remp.empty)
     or (df_summary is not None and not df_summary.empty)
 )
 
-if has_anything:
+if has_permissions or has_param:
     excel_bytes = to_excel_bytes(
         df_autres=df_autres,
         df_remp=df_remp,
         df_summary=df_summary,
         df_permissions_matrix=df_permissions_matrix,
     )
+
+    file_name = "Permissions.xlsx" if (has_permissions and not has_param) else "Export_Hopia.xlsx"
+
     st.download_button(
-        "⬇️ Télécharger l'Excel (Permissions et/ou Paramétrage)",
+        "⬇️ Télécharger l'Excel",
         data=excel_bytes,
-        file_name="Export_Hopia.xlsx",
+        file_name=file_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 else:
