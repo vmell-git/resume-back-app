@@ -51,16 +51,46 @@ PRIORITY_ORDER = [
 ]
 
 # ------------------------------------------------------
+# Mapping permissions (token -> (colonne, valeur))
+# - Priorité: "Modifications" > "Lecture seule" > "X"
+# - Cas spécial: SwapsManageWrite = "Gestionnaire"
+# ------------------------------------------------------
+PERMISSIONS_SPECS = [
+    # token, colonne (onglet/item), valeur
+    ("SwapsWrite", "Echanges et Reprises", "Modifications"),
+    ("DemandsRead", "Desiderata", "Lecture seule"),
+    ("DemandsWrite", "Desiderata", "Modifications"),
+    ("PlanningRead", "Planning Personnel", "Lecture seule"),
+    ("PlanningWrite", "Planning Personnel", "Modifications"),
+    ("DashboardRead", "Dashboard Equipe", "Lecture seule"),
+    ("TeamManageRead", "Gestion d'équipe", "Lecture seule"),
+    ("TeamManageWrite", "Gestion d'équipe", "Modifications"),
+    ("SwapsManageRead", "Gestion Echanges et Reprises", "Lecture seule"),
+    ("SwapsManageWrite", "Echanges et Reprises", "Gestionnaire"),
+    ("TaskCommentsRead", "Commentaires", "Lecture seule"),
+    ("TeamPlanningRead", "Planning d'équipe", "Lecture seule"),
+    ("TeamPlanningWrite", "Planning d'équipe", "Modifications"),
+    ("DemandsManageRead", "Gestion des desiderata", "Lecture seule"),
+    ("DemandsManageWrite", "Gestion des desiderata", "Modifications"),
+    ("PlanningManageRead", "Gestion de Planning", "Lecture seule"),
+    ("PlanningManageWrite", "Gestion de Planning", "Modifications"),
+]
+
+PERM_TOKEN_TO_COLVAL = {t: (col, val) for (t, col, val) in PERMISSIONS_SPECS}
+PERM_COLUMNS = [col for (_, col, _) in PERMISSIONS_SPECS]
+# dédoublonner en conservant l'ordre
+_seen = set()
+PERM_COLUMNS = [c for c in PERM_COLUMNS if not (c in _seen or _seen.add(c))]
+
+# Valeurs et priorités (pour arbitrer si plusieurs tokens sur une même colonne)
+# On veut : Gestionnaire > Modifications > Lecture seule > X
+PERM_RANK = {"X": 0, "Lecture seule": 1, "Modifications": 2, "Gestionnaire": 3}
+
+
+# ------------------------------------------------------
 # Parseur pour le format vertical (exemple Urgentistes)
 # ------------------------------------------------------
 def parse_vertical_blocks(content: str) -> pd.DataFrame:
-    """
-    Format attendu :
-    PK
-    Intitulé [TAB ou 2+ espaces] Type
-    (une ou plusieurs lignes de Priorités)
-    Équipes
-    """
     lines = [l.strip() for l in content.splitlines()]
     lines = [l for l in lines if l]
 
@@ -137,7 +167,7 @@ def parse_vertical_blocks(content: str) -> pd.DataFrame:
 
 
 # ------------------------------------------------------
-# Lecture de contenu texte brut (copier-coller)
+# Lecture de contenu texte brut (copier-coller paramétrage)
 # ------------------------------------------------------
 def read_text_content(content: str) -> pd.DataFrame | None:
     content = content.strip()
@@ -321,17 +351,9 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 # ------------------------------------------------------
 # Parseur Permissions (copier-coller Back-Office)
+# -> retourne une table "longue" : Membre, Email, Permissions (liste brute)
 # ------------------------------------------------------
 def parse_permissions_text(content: str) -> pd.DataFrame | None:
-    """
-    Attend un tableau type :
-    Membre   Email   <Role>
-    Nom      mail    perm1, perm2, ...
-    ...
-
-    Le séparateur principal est le TAB, mais on accepte aussi 2+ espaces.
-    On ignore les lignes parasites ("Permissions des membres", "Filtrer par nom...", vides...).
-    """
     content = (content or "").strip()
     if not content:
         return None
@@ -339,32 +361,20 @@ def parse_permissions_text(content: str) -> pd.DataFrame | None:
     lines = [l.strip() for l in content.splitlines()]
     lines = [l for l in lines if l]
 
-    # On garde les lignes qui ressemblent à des lignes tabulaires (avec tab ou au moins 2 espaces)
-    candidate_lines = [
-        l
-        for l in lines
-        if ("\t" in l) or re.search(r" {2,}", l)
-    ]
-
+    candidate_lines = [l for l in lines if ("\t" in l) or re.search(r" {2,}", l)]
     if not candidate_lines:
         return None
 
-    # Trouver l'entête contenant "Membre" et "Email"
     header_idx = None
-    header_cols = None
     for idx, l in enumerate(candidate_lines):
         cols = re.split(r"\t+| {2,}", l.strip())
-        cols_norm = [c.strip() for c in cols if c.strip()]
-        if len(cols_norm) >= 3 and cols_norm[0].lower() == "membre" and cols_norm[1].lower() == "email":
+        cols = [c.strip() for c in cols if c.strip()]
+        if len(cols) >= 3 and cols[0].lower() == "membre" and cols[1].lower() == "email":
             header_idx = idx
-            header_cols = cols_norm
             break
 
-    if header_idx is None or not header_cols:
+    if header_idx is None:
         return None
-
-    # La 3e colonne est un "rôle"/colonne métier (ex: Pédiatre)
-    role_col = header_cols[2]
 
     records = []
     for l in candidate_lines[header_idx + 1 :]:
@@ -374,42 +384,64 @@ def parse_permissions_text(content: str) -> pd.DataFrame | None:
             continue
 
         membre, email, perms = cols[0], cols[1], cols[2]
-
-        # Filtre simple : on écarte les fausses lignes
-        if membre.lower() in {"filtrer", "filtrer par nom..."}:
-            continue
         if "@" not in email:
             continue
 
-        # Permissions : normalisation (liste triée pour lecture)
         perm_list = [p.strip() for p in perms.split(",") if p.strip()]
-        perms_norm = ", ".join(perm_list)
-
         records.append(
             {
                 "Membre": membre,
                 "Email": email,
-                "Rôle": role_col,
-                "Permissions": perms_norm,
+                "Permissions_raw": perm_list,  # liste Python
             }
         )
 
     if not records:
         return None
 
-    df = pd.DataFrame(records).sort_values(by=["Membre", "Email"])
-    return df
+    return pd.DataFrame(records)
+
+
+# ------------------------------------------------------
+# Construction de la matrice Permissions
+# lignes = membres
+# colonnes = onglets/items (PERM_COLUMNS)
+# valeurs = X / Lecture seule / Modifications / Gestionnaire
+# ------------------------------------------------------
+def build_permissions_matrix(df_perm_long: pd.DataFrame) -> pd.DataFrame:
+    df = df_perm_long.copy()
+    for col in PERM_COLUMNS:
+        df[col] = "X"
+
+    def apply_token(current: str, new_val: str) -> str:
+        # garde la valeur la plus "forte"
+        if PERM_RANK.get(new_val, 0) > PERM_RANK.get(current, 0):
+            return new_val
+        return current
+
+    for idx, row in df.iterrows():
+        tokens = row.get("Permissions_raw") or []
+        for tok in tokens:
+            tok = tok.strip()
+            if tok in PERM_TOKEN_TO_COLVAL:
+                col, val = PERM_TOKEN_TO_COLVAL[tok]
+                df.at[idx, col] = apply_token(df.at[idx, col], val)
+
+    # On garde Membre, Email + colonnes dans l'ordre
+    out = df[["Membre", "Email"] + PERM_COLUMNS].copy()
+    out = out.sort_values(by=["Membre", "Email"])
+    return out
 
 
 # ------------------------------------------------------
 # Construction du fichier Excel
-# + feuille Permissions si df_permissions non vide
+# + feuille Permissions (matrice) si présente
 # ------------------------------------------------------
 def to_excel_bytes(
     df_autres: pd.DataFrame,
     df_remp: pd.DataFrame,
     df_summary: pd.DataFrame,
-    df_permissions: pd.DataFrame | None = None,
+    df_permissions_matrix: pd.DataFrame | None = None,
 ) -> bytes:
     import xlsxwriter
     from xlsxwriter.utility import xl_col_to_name
@@ -478,22 +510,21 @@ def to_excel_bytes(
 
         add_type_borders(ws3, df_remp, "Type")
 
-        # === Feuille 3 – Permissions (si présent) ===
-        if df_permissions is not None and not df_permissions.empty:
-            df_permissions.to_excel(writer, sheet_name="Permissions", index=False)
+        # === Feuille 3 – Permissions (matrice) ===
+        if df_permissions_matrix is not None and not df_permissions_matrix.empty:
+            df_permissions_matrix.to_excel(writer, sheet_name="Permissions", index=False)
             wsp = writer.sheets["Permissions"]
 
-            for col_idx, col in enumerate(df_permissions.columns):
+            for col_idx, col in enumerate(df_permissions_matrix.columns):
                 wsp.write(0, col_idx, col, fmt_header)
-                # largeurs adaptées
-                if col in ("Membre",):
+
+                # largeurs
+                if col == "Membre":
+                    wsp.set_column(col_idx, col_idx, 28)
+                elif col == "Email":
                     wsp.set_column(col_idx, col_idx, 30)
-                elif col in ("Email",):
-                    wsp.set_column(col_idx, col_idx, 30)
-                elif col in ("Rôle",):
-                    wsp.set_column(col_idx, col_idx, 18)
                 else:
-                    wsp.set_column(col_idx, col_idx, 80)
+                    wsp.set_column(col_idx, col_idx, 26)
 
         # === Feuille 4 – Résumé (inchangée) ===
         df_summary.to_excel(writer, sheet_name="Résumé", index=False)
@@ -529,29 +560,31 @@ uploaded = st.file_uploader(
 )
 
 text_pasted = st.text_area(
-    "Collez ici le contenu du Back-Office (Paramétrage) :",
+    "✂️ Collez ici le contenu du Back-Office (Paramétrage) :",
     placeholder="PK\tType\tPriorités\tÉquipes\n549\tPas de MAO...\n...",
     height=200,
 )
 
-# Nouvelle zone : Permissions
+# Zone Permissions
 permissions_pasted = st.text_area(
-    "Collez ici le contenu du Back-Office (Permissions des membres) :",
+    "🔐 Collez ici le contenu du Back-Office (Permissions des membres) :",
     placeholder="Permissions des membres\n...\nMembre\tEmail\tPédiatre\nAlice\talice@...\tPlanningRead, PlanningWrite\n...",
     height=200,
 )
 
-# Parsing permissions (optionnel)
-df_permissions = parse_permissions_text(permissions_pasted)
+# Parsing permissions -> matrice
+df_permissions_matrix = None
 if permissions_pasted.strip():
-    if df_permissions is None or df_permissions.empty:
-        st.warning("⚠️ Permissions : contenu détecté mais format non reconnu (vérifie que l'entête 'Membre Email <Rôle>' est bien présent).")
+    df_perm_long = parse_permissions_text(permissions_pasted)
+    if df_perm_long is None or df_perm_long.empty:
+        st.warning("⚠️ Permissions : contenu détecté mais format non reconnu (vérifie l'entête 'Membre  Email  <Rôle>').")
     else:
-        st.success(f"✅ Permissions : {len(df_permissions)} membres détectés.")
-        with st.expander("Aperçu – Permissions"):
-            st.dataframe(df_permissions, use_container_width=True)
+        df_permissions_matrix = build_permissions_matrix(df_perm_long)
+        st.success(f"✅ Permissions : {len(df_permissions_matrix)} membres détectés.")
+        with st.expander("Aperçu – Permissions (matrice)"):
+            st.dataframe(df_permissions_matrix, use_container_width=True)
 
-# Parsing paramétrage (comme avant)
+# Parsing paramétrage
 df_raw = None
 if uploaded is not None:
     df_raw = read_uploaded_file(uploaded)
@@ -586,13 +619,13 @@ if df_raw is not None:
         type_series = df_filtered["Type"].fillna("").astype(str).str.lower()
         is_rem = type_series.str.contains("remplissage des postes")
 
-        # --- Autres (inchangé) ---
+        # Autres (inchangé)
         df_autres = df_filtered.loc[
             ~is_rem, ["Intitulé", "Type", "Equipe", "Niveau"]
         ].copy()
         df_autres = df_autres.sort_values(by=["Type", "Niveau", "Intitulé"])
 
-        # --- Remplissage : ordre de priorité ---
+        # Remplissage : ordre de priorité
         df_remp_raw = df_filtered.loc[
             is_rem, ["Intitulé", "Type", "Equipe", "Priorités"]
         ].copy()
@@ -605,7 +638,6 @@ if df_raw is not None:
             if t in df_remp_raw["Token principal"].dropna().unique()
         ]
         priority_rank_map = {t: i + 1 for i, t in enumerate(tokens_present)}
-
         df_remp_raw["Ordre de priorité"] = df_remp_raw["Token principal"].map(priority_rank_map)
 
         df_remp = df_remp_raw[["Intitulé", "Type", "Equipe", "Ordre de priorité"]].copy()
@@ -624,7 +656,12 @@ if df_raw is not None:
         with st.expander("Aperçu – Résumé"):
             st.dataframe(df_summary, use_container_width=True)
 
-        excel_bytes = to_excel_bytes(df_autres, df_remp, df_summary, df_permissions=df_permissions)
+        excel_bytes = to_excel_bytes(
+            df_autres,
+            df_remp,
+            df_summary,
+            df_permissions_matrix=df_permissions_matrix,
+        )
         st.download_button(
             "⬇️ Télécharger l'Excel récapitulatif harmonisé",
             data=excel_bytes,
