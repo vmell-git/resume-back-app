@@ -53,34 +53,43 @@ PRIORITY_ORDER = [
 ]
 
 # ------------------------------------------------------
-# Mapping permissions (token -> (colonne, valeur))
-# - Priorité: Gestionnaire > Modifications > Lecture seule > X
+# Permissions – nouveaux libellés + "Aucun accès"
+# Règle: toute permission "édition/modif/gestion/activé" prime sur "Lecture seule"
 # ------------------------------------------------------
 PERMISSIONS_SPECS = [
-    ("SwapsWrite", "Echanges et Reprises", "Modifications"),
-    ("DemandsRead", "Desiderata", "Lecture seule"),
-    ("DemandsWrite", "Desiderata", "Modifications"),
+    ("SwapsWrite", "Echanges et Reprises", "Activé"),
+    ("DemandsRead", "Desiderata personnels", "Lecture seule"),
+    ("DemandsWrite", "Desiderata personnels", "Lecture et édition"),
     ("PlanningRead", "Planning Personnel", "Lecture seule"),
-    ("PlanningWrite", "Planning Personnel", "Modifications"),
-    ("DashboardRead", "Dashboard Equipe", "Lecture seule"),
-    ("TeamManageRead", "Gestion d'équipe", "Lecture seule"),
-    ("TeamManageWrite", "Gestion d'équipe", "Modifications"),
+    ("PlanningWrite", "Planning Personnel", "Lecture et édition"),
+    ("DashboardRead", "Tableau de bord équipes", "Lecture seule"),
+    ("TeamManageRead", "Gestion d'équipes", "Lecture seule"),
+    ("TeamManageWrite", "Gestion d'équipes", "Modifications"),
     ("SwapsManageRead", "Gestion Echanges et Reprises", "Lecture seule"),
-    ("SwapsManageWrite", "Echanges et Reprises", "Gestionnaire"),
-    ("TaskCommentsRead", "Commentaires", "Lecture seule"),
-    ("TeamPlanningRead", "Planning d'équipe", "Lecture seule"),
-    ("TeamPlanningWrite", "Planning d'équipe", "Modifications"),
-    ("DemandsManageRead", "Gestion des desiderata", "Lecture seule"),
-    ("DemandsManageWrite", "Gestion des desiderata", "Modifications"),
-    ("PlanningManageRead", "Gestion de Planning", "Lecture seule"),
-    ("PlanningManageWrite", "Gestion de Planning", "Modifications"),
+    ("SwapsManageWrite", "Gestion Echanges et Reprises", "Modifications"),
+    ("TaskCommentsRead", "Commentaires du planning", "Lecture seule"),
+    ("TeamPlanningRead", "Planning d'équipes", "Lecture seule"),
+    ("TeamPlanningWrite", "Planning d'équipes", "Modifications"),
+    ("DemandsManageRead", "Desiderata d'équipes", "Lecture seule"),
+    ("DemandsManageWrite", "Desiderata d'équipes", "Modifications"),
+    ("PlanningManageRead", "Gestion Planning (brouillons et maquettes)", "Lecture seule"),
+    ("PlanningManageWrite", "Gestion Planning (brouillons et maquettes)", "Modifications"),
 ]
 
 PERM_TOKEN_TO_COLVAL = {t: (col, val) for (t, col, val) in PERMISSIONS_SPECS}
 PERM_COLUMNS = [col for (_, col, _) in PERMISSIONS_SPECS]
 _seen = set()
 PERM_COLUMNS = [c for c in PERM_COLUMNS if not (c in _seen or _seen.add(c))]
-PERM_RANK = {"X": 0, "Lecture seule": 1, "Modifications": 2, "Gestionnaire": 3}
+
+# Ordre de priorité (plus grand = prime)
+# "Lecture et édition"/"Modifications"/"Activé" priment sur "Lecture seule"
+PERM_RANK = {
+    "Aucun accès": 0,
+    "Lecture seule": 1,
+    "Activé": 2,
+    "Lecture et édition": 3,
+    "Modifications": 4,
+}
 
 
 # ------------------------------------------------------
@@ -394,8 +403,9 @@ def parse_permissions_text(content: str) -> pd.DataFrame | None:
 
 def build_permissions_matrix(df_perm_long: pd.DataFrame) -> pd.DataFrame:
     df = df_perm_long.copy()
+    # valeur par défaut
     for col in PERM_COLUMNS:
-        df[col] = "X"
+        df[col] = "Aucun accès"
 
     def apply_token(current: str, new_val: str) -> str:
         return new_val if PERM_RANK.get(new_val, 0) > PERM_RANK.get(current, 0) else current
@@ -499,7 +509,7 @@ def to_excel_bytes(
                 elif col == "Email":
                     wsp.set_column(col_idx, col_idx, 30)
                 else:
-                    wsp.set_column(col_idx, col_idx, 26)
+                    wsp.set_column(col_idx, col_idx, 34)
 
         # --- Résumé (si présent) ---
         if df_summary is not None and not df_summary.empty:
