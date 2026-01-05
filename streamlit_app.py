@@ -511,6 +511,8 @@ def to_excel_bytes(
         if df_permissions_matrix is not None and not df_permissions_matrix.empty:
             df_permissions_matrix.to_excel(writer, sheet_name="Permissions", index=False)
             wsp = writer.sheets["Permissions"]
+        
+            # Header + largeurs
             for col_idx, col in enumerate(df_permissions_matrix.columns):
                 wsp.write(0, col_idx, col, fmt_header)
                 if col == "Membre":
@@ -519,6 +521,25 @@ def to_excel_bytes(
                     wsp.set_column(col_idx, col_idx, 30)
                 else:
                     wsp.set_column(col_idx, col_idx, 34)
+        
+            # --- Mise en gris de "Aucun accès"
+            fmt_grey = wb.add_format({"font_color": "#808080"})  # gris
+            nrows, ncols = df_permissions_matrix.shape
+        
+            # Appliquer à toute la zone de données (hors header)
+            wsp.conditional_format(
+                1,               # ligne 1 (2e ligne Excel)
+                0,               # col 0
+                nrows,           # dernière ligne (index Excel)
+                ncols - 1,       # dernière colonne
+                {
+                    "type": "text",
+                    "criteria": "containing",
+                    "value": "Aucun accès",
+                    "format": fmt_grey,
+                },
+            )
+
 
         if df_summary is not None and not df_summary.empty:
             df_summary.to_excel(writer, sheet_name="Résumé", index=False)
