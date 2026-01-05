@@ -679,4 +679,4 @@ if has_permissions or has_param:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 else:
-    st.info("Colle au moins **le Paramétrage** ou **les Permissions** pour générer un Excel.")
+    st.info("Colle au moins **le Paramétrage** ou **les Permissns** pour générer un Excel.")
