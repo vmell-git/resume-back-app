@@ -55,34 +55,55 @@ PRIORITY_ORDER = [
 # ------------------------------------------------------
 # Permissions – nouveaux libellés + "Aucun accès"
 # Règle: toute permission "édition/modif/gestion/activé" prime sur "Lecture seule"
+# + Ordre des colonnes demandé
 # ------------------------------------------------------
 PERMISSIONS_SPECS = [
     ("SwapsWrite", "Echanges et Reprises", "Activé"),
     ("DemandsRead", "Desiderata personnels", "Lecture seule"),
     ("DemandsWrite", "Desiderata personnels", "Lecture et édition"),
-    ("PlanningRead", "Planning Personnel", "Lecture seule"),
-    ("PlanningWrite", "Planning Personnel", "Lecture et édition"),
+    ("PlanningRead", "Planning personnel", "Lecture seule"),
+    ("PlanningWrite", "Planning personnel", "Lecture et édition"),
     ("DashboardRead", "Tableau de bord équipes", "Lecture seule"),
-    ("TeamManageRead", "Gestion d'équipes", "Lecture seule"),
-    ("TeamManageWrite", "Gestion d'équipes", "Modifications"),
+    ("TeamManageRead", "Gestion d’équipes", "Lecture seule"),
+    ("TeamManageWrite", "Gestion d’équipes", "Modifications"),
     ("SwapsManageRead", "Gestion Echanges et Reprises", "Lecture seule"),
     ("SwapsManageWrite", "Gestion Echanges et Reprises", "Modifications"),
-    ("TaskCommentsRead", "Commentaires du planning", "Lecture seule"),
-    ("TeamPlanningRead", "Planning d'équipes", "Lecture seule"),
-    ("TeamPlanningWrite", "Planning d'équipes", "Modifications"),
-    ("DemandsManageRead", "Desiderata d'équipes", "Lecture seule"),
-    ("DemandsManageWrite", "Desiderata d'équipes", "Modifications"),
-    ("PlanningManageRead", "Gestion Planning (brouillons et maquettes)", "Lecture seule"),
-    ("PlanningManageWrite", "Gestion Planning (brouillons et maquettes)", "Modifications"),
+    ("TaskCommentsRead", "Commentaires du planning d’équipes", "Lecture seule"),
+    ("TeamPlanningRead", "Planning d’équipes", "Lecture seule"),
+    ("TeamPlanningWrite", "Planning d’équipes", "Modifications"),
+    ("DemandsManageRead", "Desiderata d’équipe", "Lecture seule"),
+    ("DemandsManageWrite", "Desiderata d’équipe", "Modifications"),
+    ("PlanningManageRead", "Gestion planning ( brouillons et maquettes )", "Lecture seule"),
+    ("PlanningManageWrite", "Gestion planning ( brouillons et maquettes )", "Modifications"),
 ]
 
 PERM_TOKEN_TO_COLVAL = {t: (col, val) for (t, col, val) in PERMISSIONS_SPECS}
-PERM_COLUMNS = [col for (_, col, _) in PERMISSIONS_SPECS]
+
+# Ordre des colonnes EXACT demandé (après Membre / Email)
+PERM_COLUMNS_ORDERED = [
+    "Planning personnel",
+    "Desiderata personnels",
+    "Tableau de bord équipes",
+    "Planning d’équipes",
+    "Commentaires du planning d’équipes",
+    "Gestion planning ( brouillons et maquettes )",
+    "Echanges et Reprises",
+    "Gestion Echanges et Reprises",
+    "Desiderata d’équipe",
+    "Gestion d’équipes",
+]
+
+# Vérif de cohérence: on garde l’ordre demandé + on ajoute à la fin toute colonne oubliée (au cas où)
+_all_cols = []
 _seen = set()
-PERM_COLUMNS = [c for c in PERM_COLUMNS if not (c in _seen or _seen.add(c))]
+for _, col, _ in PERMISSIONS_SPECS:
+    if col not in _seen:
+        _seen.add(col)
+        _all_cols.append(col)
+
+PERM_COLUMNS = [c for c in PERM_COLUMNS_ORDERED if c in _all_cols] + [c for c in _all_cols if c not in PERM_COLUMNS_ORDERED]
 
 # Ordre de priorité (plus grand = prime)
-# "Lecture et édition"/"Modifications"/"Activé" priment sur "Lecture seule"
 PERM_RANK = {
     "Aucun accès": 0,
     "Lecture seule": 1,
@@ -356,7 +377,6 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 # ------------------------------------------------------
 # Parseur Permissions (copier-coller Back-Office)
-# -> table "longue" : Membre, Email, Permissions_raw (list)
 # ------------------------------------------------------
 def parse_permissions_text(content: str) -> pd.DataFrame | None:
     content = (content or "").strip()
@@ -403,7 +423,6 @@ def parse_permissions_text(content: str) -> pd.DataFrame | None:
 
 def build_permissions_matrix(df_perm_long: pd.DataFrame) -> pd.DataFrame:
     df = df_perm_long.copy()
-    # valeur par défaut
     for col in PERM_COLUMNS:
         df[col] = "Aucun accès"
 
@@ -425,7 +444,6 @@ def build_permissions_matrix(df_perm_long: pd.DataFrame) -> pd.DataFrame:
 
 # ------------------------------------------------------
 # Construction du fichier Excel
-# -> écrit seulement les feuilles disponibles
 # ------------------------------------------------------
 def to_excel_bytes(
     df_autres: pd.DataFrame | None = None,
@@ -467,7 +485,6 @@ def to_excel_bytes(
                 },
             )
 
-        # --- Paramétrage – Autres (si présent) ---
         if df_autres is not None and not df_autres.empty:
             df_autres.to_excel(writer, sheet_name="Paramétrage – Autres", index=False)
             ws2 = writer.sheets["Paramétrage – Autres"]
@@ -479,26 +496,18 @@ def to_excel_bytes(
                 niveau_col = df_autres.columns.get_loc("Niveau")
                 for row_idx in range(1, len(df_autres) + 1):
                     val = str(df_autres.iloc[row_idx - 1]["Niveau"])
-                    ws2.write(
-                        row_idx,
-                        niveau_col,
-                        val,
-                        wb.add_format({"bg_color": color_for_level(val)}),
-                    )
+                    ws2.write(row_idx, niveau_col, val, wb.add_format({"bg_color": color_for_level(val)}))
 
             add_type_borders(ws2, df_autres, "Type")
 
-        # --- Paramétrage – Remplissage (si présent) ---
         if df_remp is not None and not df_remp.empty:
             df_remp.to_excel(writer, sheet_name="Paramétrage – Remplissage", index=False)
             ws3 = writer.sheets["Paramétrage – Remplissage"]
             for col_idx, col in enumerate(df_remp.columns):
                 ws3.write(0, col_idx, col, fmt_header)
                 ws3.set_column(col_idx, col_idx, 28)
-
             add_type_borders(ws3, df_remp, "Type")
 
-        # --- Permissions (si présent) ---
         if df_permissions_matrix is not None and not df_permissions_matrix.empty:
             df_permissions_matrix.to_excel(writer, sheet_name="Permissions", index=False)
             wsp = writer.sheets["Permissions"]
@@ -511,7 +520,6 @@ def to_excel_bytes(
                 else:
                     wsp.set_column(col_idx, col_idx, 34)
 
-        # --- Résumé (si présent) ---
         if df_summary is not None and not df_summary.empty:
             df_summary.to_excel(writer, sheet_name="Résumé", index=False)
             ws = writer.sheets["Résumé"]
@@ -524,13 +532,9 @@ def to_excel_bytes(
                 if col_name in df_summary.columns:
                     col_idx = df_summary.columns.get_loc(col_name)
                     ws.conditional_format(
-                        1,
-                        col_idx,
-                        len(df_summary) + 50,
-                        col_idx,
+                        1, col_idx, len(df_summary) + 50, col_idx,
                         {"type": "no_errors", "format": wb.add_format({"bg_color": bg})},
                     )
-
             add_type_borders(ws, df_summary, "Rubrique")
 
     return output.getvalue()
@@ -557,7 +561,7 @@ permissions_pasted = st.text_area(
 )
 
 # ------------------------------------------------------
-# Permissions (stockées en session_state pour survivre aux reruns)
+# Permissions (session_state)
 # ------------------------------------------------------
 if "df_permissions_matrix" not in st.session_state:
     st.session_state["df_permissions_matrix"] = None
@@ -604,13 +608,8 @@ if df_raw is not None:
             )
         ].copy()
 
-        niveau_order = pd.CategoricalDtype(
-            categories=["DURE", "MOYENNE", "SOUPLE"],
-            ordered=True,
-        )
-        df_filtered["Niveau"] = (
-            df_filtered["Niveau"].astype(str).str.upper().astype(niveau_order)
-        )
+        niveau_order = pd.CategoricalDtype(categories=["DURE", "MOYENNE", "SOUPLE"], ordered=True)
+        df_filtered["Niveau"] = df_filtered["Niveau"].astype(str).str.upper().astype(niveau_order)
 
         df_summary = build_summary(df_filtered)
         df_filtered["Equipe"] = df_filtered["Équipes"]
@@ -618,27 +617,18 @@ if df_raw is not None:
         type_series = df_filtered["Type"].fillna("").astype(str).str.lower()
         is_rem = type_series.str.contains("remplissage des postes")
 
-        df_autres = df_filtered.loc[
-            ~is_rem, ["Intitulé", "Type", "Equipe", "Niveau"]
-        ].copy().sort_values(by=["Type", "Niveau", "Intitulé"])
+        df_autres = df_filtered.loc[~is_rem, ["Intitulé", "Type", "Equipe", "Niveau"]].copy()
+        df_autres = df_autres.sort_values(by=["Type", "Niveau", "Intitulé"])
 
-        df_remp_raw = df_filtered.loc[
-            is_rem, ["Intitulé", "Type", "Equipe", "Priorités"]
-        ].copy()
+        df_remp_raw = df_filtered.loc[is_rem, ["Intitulé", "Type", "Equipe", "Priorités"]].copy()
         df_remp_raw["Token principal"] = df_remp_raw["Priorités"].apply(main_priority_token)
 
-        tokens_present = [
-            t
-            for t in PRIORITY_ORDER
-            if t in df_remp_raw["Token principal"].dropna().unique()
-        ]
+        tokens_present = [t for t in PRIORITY_ORDER if t in df_remp_raw["Token principal"].dropna().unique()]
         priority_rank_map = {t: i + 1 for i, t in enumerate(tokens_present)}
         df_remp_raw["Ordre de priorité"] = df_remp_raw["Token principal"].map(priority_rank_map)
 
         df_remp = df_remp_raw[["Intitulé", "Type", "Equipe", "Ordre de priorité"]].copy()
-        df_remp = df_remp.sort_values(
-            by=["Type", "Ordre de priorité", "Intitulé"], na_position="last"
-        )
+        df_remp = df_remp.sort_values(by=["Type", "Ordre de priorité", "Intitulé"], na_position="last")
 
         st.success("✅ Données paramétrage chargées, filtrées et interprétées.")
         with st.expander("Aperçu – Paramétrage – Autres"):
@@ -652,8 +642,7 @@ if df_raw is not None:
         st.error(f"Erreur lors du traitement des données paramétrage : {e}")
 
 # ------------------------------------------------------
-# Export : autorisé si au moins permissions OU paramétrage
-# (split explicite + nom de fichier adapté)
+# Export
 # ------------------------------------------------------
 has_permissions = df_permissions_matrix is not None and not df_permissions_matrix.empty
 has_param = (
@@ -671,7 +660,6 @@ if has_permissions or has_param:
     )
 
     file_name = "Permissions.xlsx" if (has_permissions and not has_param) else "Export_Hopia.xlsx"
-
     st.download_button(
         "⬇️ Télécharger l'Excel",
         data=excel_bytes,
