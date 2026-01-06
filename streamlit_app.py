@@ -28,7 +28,7 @@ st.title("📊 Hopia – Générateur d’Excel récapitulatif harmonisé")
 COLOR_DURE = "#ffcccc"
 COLOR_MOY = "#ffe5b4"
 COLOR_SOFT = "#ccffcc"
-COLOR_HEADER = "#003366"
+COLOR_HEADER = "#2f32b2"
 COLOR_HEADER_TXT = "#FFFFFF"
 
 # ------------------------------------------------------
@@ -68,7 +68,7 @@ PERMISSIONS_SPECS = [
     ("TeamManageWrite", "Gestion d’équipes", "Modifications"),
     ("SwapsManageRead", "Gestion Echanges et Reprises", "Lecture seule"),
     ("SwapsManageWrite", "Gestion Echanges et Reprises", "Modifications"),
-    ("TaskCommentsRead", "Commentaires du planning d’équipes", "Lecture seule"),
+    ("TaskCommentsRead", "Commentaires du planning d’équipes", "Activé"),
     ("TeamPlanningRead", "Planning d’équipes", "Lecture seule"),
     ("TeamPlanningWrite", "Planning d’équipes", "Modifications"),
     ("DemandsManageRead", "Desiderata d’équipe", "Lecture seule"),
@@ -457,6 +457,7 @@ def to_excel_bytes(
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         wb = writer.book
+        wb.formats[0].set_font_name("Montserrat")
         fmt_header = wb.add_format(
             {
                 "bold": True,
