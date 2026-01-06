@@ -112,7 +112,6 @@ PERM_RANK = {
     "Modifications": 4,
 }
 
-
 # ------------------------------------------------------
 # Parseur pour le format vertical (exemple Urgentistes)
 # ------------------------------------------------------
@@ -451,27 +450,44 @@ def to_excel_bytes(
     df_summary: pd.DataFrame | None = None,
     df_permissions_matrix: pd.DataFrame | None = None,
 ) -> bytes:
-    import xlsxwriter
     from xlsxwriter.utility import xl_col_to_name
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         wb = writer.book
+
+        # Défaut : Montserrat 10 partout
         wb.formats[0].set_font_name("Montserrat")
+        wb.formats[0].set_font_size(10)
+
+        # Header : Montserrat 11
         fmt_header = wb.add_format(
             {
                 "bold": True,
                 "bg_color": COLOR_HEADER,
                 "font_color": COLOR_HEADER_TXT,
                 "align": "center",
+                "font_name": "Montserrat",
+                "font_size": 11,
             }
         )
+
+        # Helpers : caches de formats (évite de créer un format par cellule)
+        bg_fmt_cache: dict[str, "xlsxwriter.format.Format"] = {}
+        def get_bg_fmt(bg_color: str):
+            if bg_color not in bg_fmt_cache:
+                bg_fmt_cache[bg_color] = wb.add_format(
+                    {"bg_color": bg_color, "font_name": "Montserrat", "font_size": 10}
+                )
+            return bg_fmt_cache[bg_color]
 
         def add_type_borders(ws, df: pd.DataFrame, col_name: str):
             if df is None or df.empty or col_name not in df.columns:
                 return
             type_col_idx = df.columns.get_loc(col_name)
             col_letter = xl_col_to_name(type_col_idx)
+
+            # Format bordure uniquement (pas besoin de police)
             border_fmt = wb.add_format({"top": 2})
             nrows, ncols = df.shape
             ws.conditional_format(
@@ -486,9 +502,13 @@ def to_excel_bytes(
                 },
             )
 
+        # --------------------------
+        # Paramétrage – Autres
+        # --------------------------
         if df_autres is not None and not df_autres.empty:
             df_autres.to_excel(writer, sheet_name="Paramétrage – Autres", index=False)
             ws2 = writer.sheets["Paramétrage – Autres"]
+
             for col_idx, col in enumerate(df_autres.columns):
                 ws2.write(0, col_idx, col, fmt_header)
                 ws2.set_column(col_idx, col_idx, 28)
@@ -497,23 +517,31 @@ def to_excel_bytes(
                 niveau_col = df_autres.columns.get_loc("Niveau")
                 for row_idx in range(1, len(df_autres) + 1):
                     val = str(df_autres.iloc[row_idx - 1]["Niveau"])
-                    ws2.write(row_idx, niveau_col, val, wb.add_format({"bg_color": color_for_level(val)}))
+                    bg = color_for_level(val)
+                    ws2.write(row_idx, niveau_col, val, get_bg_fmt(bg))
 
             add_type_borders(ws2, df_autres, "Type")
 
+        # --------------------------
+        # Paramétrage – Remplissage
+        # --------------------------
         if df_remp is not None and not df_remp.empty:
             df_remp.to_excel(writer, sheet_name="Paramétrage – Remplissage", index=False)
             ws3 = writer.sheets["Paramétrage – Remplissage"]
+
             for col_idx, col in enumerate(df_remp.columns):
                 ws3.write(0, col_idx, col, fmt_header)
                 ws3.set_column(col_idx, col_idx, 28)
+
             add_type_borders(ws3, df_remp, "Type")
 
+        # --------------------------
+        # Permissions
+        # --------------------------
         if df_permissions_matrix is not None and not df_permissions_matrix.empty:
             df_permissions_matrix.to_excel(writer, sheet_name="Permissions", index=False)
             wsp = writer.sheets["Permissions"]
-        
-            # Header + largeurs
+
             for col_idx, col in enumerate(df_permissions_matrix.columns):
                 wsp.write(0, col_idx, col, fmt_header)
                 if col == "Membre":
@@ -522,17 +550,17 @@ def to_excel_bytes(
                     wsp.set_column(col_idx, col_idx, 30)
                 else:
                     wsp.set_column(col_idx, col_idx, 34)
-        
-            # --- Mise en gris de "Aucun accès"
-            fmt_grey = wb.add_format({"font_color": "#808080"})  # gris
+
+            fmt_grey = wb.add_format(
+                {"font_color": "#808080", "font_name": "Montserrat", "font_size": 10}
+            )
             nrows, ncols = df_permissions_matrix.shape
-        
-            # Appliquer à toute la zone de données (hors header)
+
             wsp.conditional_format(
-                1,               # ligne 1 (2e ligne Excel)
-                0,               # col 0
-                nrows,           # dernière ligne (index Excel)
-                ncols - 1,       # dernière colonne
+                1,
+                0,
+                nrows,
+                ncols - 1,
                 {
                     "type": "text",
                     "criteria": "containing",
@@ -541,10 +569,13 @@ def to_excel_bytes(
                 },
             )
 
-
+        # --------------------------
+        # Résumé
+        # --------------------------
         if df_summary is not None and not df_summary.empty:
             df_summary.to_excel(writer, sheet_name="Résumé", index=False)
             ws = writer.sheets["Résumé"]
+
             for col_idx, col in enumerate(df_summary.columns):
                 ws.write(0, col_idx, col, fmt_header)
                 ws.set_column(col_idx, col_idx, 25)
@@ -554,9 +585,13 @@ def to_excel_bytes(
                 if col_name in df_summary.columns:
                     col_idx = df_summary.columns.get_loc(col_name)
                     ws.conditional_format(
-                        1, col_idx, len(df_summary) + 50, col_idx,
-                        {"type": "no_errors", "format": wb.add_format({"bg_color": bg})},
+                        1,
+                        col_idx,
+                        len(df_summary) + 50,
+                        col_idx,
+                        {"type": "no_errors", "format": get_bg_fmt(bg)},
                     )
+
             add_type_borders(ws, df_summary, "Rubrique")
 
     return output.getvalue()
